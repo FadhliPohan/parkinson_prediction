@@ -1,0 +1,841 @@
+import argparse
+import json
+import random
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
+
+import matplotlib
+matplotlib.use("Agg")
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import tensorflow as tf
+from matplotlib import pyplot as plt
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+    roc_curve,
+)
+from sklearn.preprocessing import label_binarize
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def set_global_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+
+
+def ensure_gpu_available(gpu_memory_limit_mb: Optional[int] = None) -> None:
+    gpu_devices = tf.config.list_physical_devices("GPU")
+    if not gpu_devices:
+        print("\n[TRAINING DIBATALKAN] GPU tidak terdeteksi.")
+        print("Pastikan TensorFlow GPU dan driver CUDA/cuDNN sudah terpasang dengan benar.")
+        raise SystemExit(1)
+
+    if gpu_memory_limit_mb is not None and gpu_memory_limit_mb > 0:
+        try:
+            tf.config.set_logical_device_configuration(
+                gpu_devices[0],
+                [tf.config.LogicalDeviceConfiguration(memory_limit=gpu_memory_limit_mb)],
+            )
+        except Exception:
+            # Jika gagal set limit (mis. runtime sudah inisialisasi), fallback ke memory growth.
+            for device in gpu_devices:
+                try:
+                    tf.config.experimental.set_memory_growth(device, True)
+                except Exception:
+                    pass
+    else:
+        for device in gpu_devices:
+            try:
+                tf.config.experimental.set_memory_growth(device, True)
+            except Exception:
+                # Aman diabaikan jika memory growth tidak bisa diubah pada environment tertentu.
+                pass
+
+    print("\nGPU terdeteksi. Training akan menggunakan GPU:")
+    for device in gpu_devices:
+        print("- {}".format(device.name))
+    if gpu_memory_limit_mb is not None and gpu_memory_limit_mb > 0:
+        print("Batas memori GPU: {} MB".format(gpu_memory_limit_mb))
+
+
+def apply_runtime_optimizations(enable_mixed_precision: bool) -> None:
+    if not enable_mixed_precision:
+        return
+
+    try:
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        print("Mixed precision aktif (float16) untuk mengurangi pemakaian memori GPU.")
+    except Exception as exc:
+        print("Peringatan: gagal mengaktifkan mixed precision -> {}".format(exc))
+
+
+def pick_split_limit(default_limit: Optional[int], split_limit: Optional[int]) -> Optional[int]:
+    if split_limit is not None and split_limit > 0:
+        return split_limit
+    return default_limit
+
+
+def effective_sample_count(
+    total_samples: int,
+    batch_size: int,
+    batch_limit: Optional[int],
+) -> int:
+    if batch_limit is not None and batch_limit > 0:
+        return min(total_samples, batch_limit * batch_size)
+    return total_samples
+
+
+def ensure_split_structure(dataset_dir: Path) -> None:
+    required_splits = ["train", "testing", "validation"]
+    missing = []
+    for split_name in required_splits:
+        split_path = dataset_dir / split_name
+        if not split_path.exists() or not split_path.is_dir():
+            missing.append(str(split_path))
+    if missing:
+        raise FileNotFoundError("Folder split tidak lengkap: {}".format(", ".join(missing)))
+
+
+def get_class_names(dataset_dir: Path) -> List[str]:
+    train_dir = dataset_dir / "train"
+    class_names = sorted([p.name for p in train_dir.iterdir() if p.is_dir()])
+    if len(class_names) < 2:
+        raise ValueError("Minimal harus ada 2 kelas. Saat ini ditemukan: {}".format(class_names))
+    return class_names
+
+
+def list_image_files(folder: Path) -> List[Path]:
+    return sorted(
+        [
+            f
+            for f in folder.iterdir()
+            if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+    )
+
+
+def collect_split_files(
+    split_dir: Path,
+    class_names: List[str],
+    class_to_index: Dict[str, int],
+    max_per_class: Optional[int],
+    seed: int,
+) -> Tuple[List[str], List[int], Dict[str, int]]:
+    rng = random.Random(seed)
+    filepaths: List[str] = []
+    labels: List[int] = []
+    class_counts: Dict[str, int] = {}
+
+    for class_name in class_names:
+        class_dir = split_dir / class_name
+        if not class_dir.exists():
+            raise FileNotFoundError("Folder kelas tidak ditemukan: {}".format(class_dir))
+
+        files = list_image_files(class_dir)
+        if max_per_class is not None and max_per_class > 0:
+            rng.shuffle(files)
+            files = files[:max_per_class]
+
+        class_counts[class_name] = len(files)
+        for image_path in files:
+            filepaths.append(str(image_path))
+            labels.append(class_to_index[class_name])
+
+    return filepaths, labels, class_counts
+
+
+def _decode_and_resize_image(path: tf.Tensor, label: tf.Tensor, image_size: Tuple[int, int], binary: bool):
+    image_bytes = tf.io.read_file(path)
+    image = tf.image.decode_image(image_bytes, channels=3, expand_animations=False)
+    image.set_shape([None, None, 3])
+    image = tf.image.resize(image, image_size, method="bilinear")
+    image = tf.cast(image, tf.float32)
+    if binary:
+        label = tf.cast(label, tf.float32)
+    else:
+        label = tf.cast(label, tf.int32)
+    return image, label
+
+
+def make_dataset(
+    filepaths: List[str],
+    labels: List[int],
+    image_size: Tuple[int, int],
+    batch_size: int,
+    seed: int,
+    shuffle: bool,
+    binary: bool,
+    shuffle_buffer_size: int,
+    num_parallel_calls: int,
+    prefetch_buffer: int,
+    batch_limit: Optional[int],
+) -> tf.data.Dataset:
+    dataset = tf.data.Dataset.from_tensor_slices((filepaths, labels))
+    options = tf.data.Options()
+    options.experimental_deterministic = not shuffle
+    dataset = dataset.with_options(options)
+
+    if shuffle:
+        buffer_size = min(max(1, shuffle_buffer_size), max(1, len(filepaths)))
+        dataset = dataset.shuffle(
+            buffer_size=buffer_size,
+            seed=seed,
+            reshuffle_each_iteration=True,
+        )
+
+    map_calls = max(1, int(num_parallel_calls))
+    dataset = dataset.map(
+        lambda p, l: _decode_and_resize_image(p, l, image_size, binary),
+        num_parallel_calls=map_calls,
+    )
+    dataset = dataset.batch(batch_size)
+
+    if batch_limit is not None and batch_limit > 0:
+        dataset = dataset.take(batch_limit)
+
+    dataset = dataset.prefetch(max(1, int(prefetch_buffer)))
+    return dataset
+
+
+def build_model(
+    backbone_builder: Callable,
+    preprocess_fn: Callable,
+    input_shape: Tuple[int, int, int],
+    num_classes: int,
+    dropout_rate: float,
+    use_pretrained: bool,
+    learning_rate: float,
+) -> Tuple[tf.keras.Model, tf.keras.Model]:
+    weights = "imagenet" if use_pretrained else None
+    try:
+        base_model = backbone_builder(
+            include_top=False,
+            weights=weights,
+            input_shape=input_shape,
+        )
+    except Exception as exc:
+        if use_pretrained:
+            print(
+                "Peringatan: gagal memuat bobot ImageNet ({}). Fallback ke bobot acak.".format(exc)
+            )
+            base_model = backbone_builder(
+                include_top=False,
+                weights=None,
+                input_shape=input_shape,
+            )
+        else:
+            raise
+
+    base_model.trainable = False
+
+    inputs = tf.keras.Input(shape=input_shape, name="input_image")
+    x = preprocess_fn(inputs)
+    x = base_model(x, training=False)
+    x = tf.keras.layers.GlobalAveragePooling2D(name="gap")(x)
+    x = tf.keras.layers.Dropout(dropout_rate, name="dropout")(x)
+
+    if num_classes == 2:
+        outputs = tf.keras.layers.Dense(1, activation="sigmoid", name="prediction")(x)
+    else:
+        outputs = tf.keras.layers.Dense(num_classes, activation="softmax", name="prediction")(x)
+
+    model = tf.keras.Model(inputs=inputs, outputs=outputs, name="classifier_model")
+    loss, metrics = build_loss_and_metrics(num_classes)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss=loss,
+        metrics=metrics,
+    )
+    return model, base_model
+
+
+def build_loss_and_metrics(num_classes: int):
+    if num_classes == 2:
+        return (
+            tf.keras.losses.BinaryCrossentropy(),
+            [
+                tf.keras.metrics.BinaryAccuracy(name="accuracy"),
+                tf.keras.metrics.AUC(name="auc"),
+            ],
+        )
+    return (
+        tf.keras.losses.SparseCategoricalCrossentropy(),
+        [
+            tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy"),
+            tf.keras.metrics.AUC(name="auc", multi_label=True),
+        ],
+    )
+
+
+def merge_histories(history_a: Dict[str, List[float]], history_b: Dict[str, List[float]]) -> Dict[str, List[float]]:
+    merged: Dict[str, List[float]] = {}
+    all_keys = set(history_a.keys()).union(set(history_b.keys()))
+    for key in all_keys:
+        merged[key] = list(history_a.get(key, [])) + list(history_b.get(key, []))
+    return merged
+
+
+def plot_training_curves(history_df: pd.DataFrame, output_path: Path) -> None:
+    if history_df.empty:
+        return
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    if "loss" in history_df:
+        plt.plot(history_df["loss"], label="train_loss")
+    if "val_loss" in history_df:
+        plt.plot(history_df["val_loss"], label="val_loss")
+    plt.title("Loss Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    if "loss" in history_df or "val_loss" in history_df:
+        plt.legend()
+    plt.grid(alpha=0.3, linestyle="--")
+
+    plt.subplot(1, 2, 2)
+    if "accuracy" in history_df:
+        plt.plot(history_df["accuracy"], label="train_accuracy")
+    if "val_accuracy" in history_df:
+        plt.plot(history_df["val_accuracy"], label="val_accuracy")
+    plt.title("Accuracy Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    if "accuracy" in history_df or "val_accuracy" in history_df:
+        plt.legend()
+    plt.grid(alpha=0.3, linestyle="--")
+
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+
+
+def plot_confusion_matrix(cm: np.ndarray, class_names: List[str], output_path: Path) -> None:
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+    )
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.title("Confusion Matrix")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+
+
+def plot_roc_curve_binary(y_true: np.ndarray, y_prob: np.ndarray, output_path: Path) -> float:
+    if len(np.unique(y_true)) < 2:
+        return float("nan")
+    fpr, tpr, _ = roc_curve(y_true, y_prob)
+    auc_value = roc_auc_score(y_true, y_prob)
+    plt.figure(figsize=(6, 5))
+    plt.plot(fpr, tpr, label="ROC (AUC={:.4f})".format(auc_value))
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve")
+    plt.legend(loc="lower right")
+    plt.grid(alpha=0.3, linestyle="--")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+    return float(auc_value)
+
+
+def plot_roc_curve_multiclass(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    class_names: List[str],
+    output_path: Path,
+) -> float:
+    y_true_bin = label_binarize(y_true, classes=list(range(len(class_names))))
+    auc_value = roc_auc_score(y_true_bin, y_prob, average="macro", multi_class="ovr")
+
+    plt.figure(figsize=(7, 6))
+    for class_index, class_name in enumerate(class_names):
+        fpr, tpr, _ = roc_curve(y_true_bin[:, class_index], y_prob[:, class_index])
+        plt.plot(fpr, tpr, label="{} (AUC={:.4f})".format(class_name, roc_auc_score(y_true_bin[:, class_index], y_prob[:, class_index])))
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve (OvR)")
+    plt.legend(loc="lower right", fontsize=8)
+    plt.grid(alpha=0.3, linestyle="--")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+    return float(auc_value)
+
+
+def plot_split_distribution(split_counts: Dict[str, Dict[str, int]], output_path: Path) -> None:
+    dataframe = pd.DataFrame(split_counts).T
+    dataframe = dataframe.sort_index()
+    ax = dataframe.plot(kind="bar", figsize=(9, 5))
+    ax.set_title("Distribusi Data per Split")
+    ax.set_xlabel("Split")
+    ax.set_ylabel("Jumlah Gambar")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+
+
+def plot_metrics_table(metrics: Dict[str, float], output_path: Path) -> None:
+    table_df = pd.DataFrame(
+        [{"Metric": key, "Value": value} for key, value in metrics.items()]
+    )
+    fig, ax = plt.subplots(figsize=(6, max(2.5, 0.6 * len(table_df))))
+    ax.axis("off")
+    table = ax.table(
+        cellText=table_df.values,
+        colLabels=table_df.columns,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.4)
+    plt.title("Evaluation Metrics")
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+
+
+def run_training_pipeline(
+    model_name: str,
+    backbone_builder: Callable,
+    preprocess_fn: Callable,
+    args: argparse.Namespace,
+) -> Dict[str, Path]:
+    set_global_seed(args.seed)
+    ensure_gpu_available(args.gpu_memory_limit_mb)
+    apply_runtime_optimizations(args.mixed_precision)
+
+    project_root = Path(__file__).resolve().parents[1]
+    dataset_dir = (project_root / args.dataset_dir).resolve()
+    ensure_split_structure(dataset_dir)
+
+    class_names = get_class_names(dataset_dir)
+    class_to_index = dict((name, idx) for idx, name in enumerate(class_names))
+    num_classes = len(class_names)
+    is_binary = num_classes == 2
+
+    report_root = (project_root / "report" / model_name).resolve()
+    models_root = (project_root / "trained_models" / model_name).resolve()
+    report_root.mkdir(parents=True, exist_ok=True)
+    models_root.mkdir(parents=True, exist_ok=True)
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_report_dir = report_root / run_id
+    run_model_dir = models_root / run_id
+    run_report_dir.mkdir(parents=True, exist_ok=True)
+    run_model_dir.mkdir(parents=True, exist_ok=True)
+
+    split_paths = {
+        "train": dataset_dir / "train",
+        "testing": dataset_dir / "testing",
+        "validation": dataset_dir / "validation",
+    }
+
+    train_limit = pick_split_limit(args.max_per_class, args.max_train_per_class)
+    test_limit = pick_split_limit(args.max_per_class, args.max_test_per_class)
+    val_limit = pick_split_limit(args.max_per_class, args.max_validation_per_class)
+
+    train_paths, train_labels, train_counts = collect_split_files(
+        split_paths["train"], class_names, class_to_index, train_limit, args.seed
+    )
+    test_paths, test_labels, test_counts = collect_split_files(
+        split_paths["testing"], class_names, class_to_index, test_limit, args.seed + 1
+    )
+    val_paths, val_labels, val_counts = collect_split_files(
+        split_paths["validation"], class_names, class_to_index, val_limit, args.seed + 2
+    )
+
+    if len(train_paths) == 0 or len(test_paths) == 0 or len(val_paths) == 0:
+        raise ValueError("Data train/testing/validation kosong. Jalankan split data terlebih dahulu.")
+
+    split_counts = {
+        "train": train_counts,
+        "testing": test_counts,
+        "validation": val_counts,
+    }
+
+    train_batch_limit = args.train_batch_limit if args.train_batch_limit and args.train_batch_limit > 0 else None
+    validation_batch_limit = (
+        args.validation_batch_limit if args.validation_batch_limit and args.validation_batch_limit > 0 else None
+    )
+    test_batch_limit = args.test_batch_limit if args.test_batch_limit and args.test_batch_limit > 0 else None
+
+    effective_train_samples = effective_sample_count(len(train_labels), args.batch_size, train_batch_limit)
+    effective_validation_samples = effective_sample_count(len(val_labels), args.batch_size, validation_batch_limit)
+    effective_test_samples = effective_sample_count(len(test_labels), args.batch_size, test_batch_limit)
+
+    print("\n=== Mode Hemat Resource ===")
+    print("Batch size                :", args.batch_size)
+    print("Train batch limit/epoch   :", train_batch_limit if train_batch_limit else "full")
+    print("Validation batch limit    :", validation_batch_limit if validation_batch_limit else "full")
+    print("Test batch limit          :", test_batch_limit if test_batch_limit else "full")
+    print("Shuffle buffer            :", args.shuffle_buffer_size)
+    print("Parallel map calls        :", args.num_parallel_calls)
+    print("Prefetch buffer           :", args.prefetch_buffer)
+    print("Sample train dipakai      :", effective_train_samples, "dari", len(train_labels))
+    print("Sample validation dipakai :", effective_validation_samples, "dari", len(val_labels))
+    print("Sample test dipakai       :", effective_test_samples, "dari", len(test_labels))
+
+    input_shape = (args.image_size, args.image_size, 3)
+    train_ds = make_dataset(
+        train_paths,
+        train_labels,
+        (args.image_size, args.image_size),
+        args.batch_size,
+        args.seed,
+        shuffle=True,
+        binary=is_binary,
+        shuffle_buffer_size=args.shuffle_buffer_size,
+        num_parallel_calls=args.num_parallel_calls,
+        prefetch_buffer=args.prefetch_buffer,
+        batch_limit=train_batch_limit,
+    )
+    val_ds = make_dataset(
+        val_paths,
+        val_labels,
+        (args.image_size, args.image_size),
+        args.batch_size,
+        args.seed,
+        shuffle=False,
+        binary=is_binary,
+        shuffle_buffer_size=args.shuffle_buffer_size,
+        num_parallel_calls=args.num_parallel_calls,
+        prefetch_buffer=args.prefetch_buffer,
+        batch_limit=validation_batch_limit,
+    )
+    test_ds = make_dataset(
+        test_paths,
+        test_labels,
+        (args.image_size, args.image_size),
+        args.batch_size,
+        args.seed,
+        shuffle=False,
+        binary=is_binary,
+        shuffle_buffer_size=args.shuffle_buffer_size,
+        num_parallel_calls=args.num_parallel_calls,
+        prefetch_buffer=args.prefetch_buffer,
+        batch_limit=test_batch_limit,
+    )
+
+    model, base_model = build_model(
+        backbone_builder=backbone_builder,
+        preprocess_fn=preprocess_fn,
+        input_shape=input_shape,
+        num_classes=num_classes,
+        dropout_rate=args.dropout,
+        use_pretrained=not args.no_pretrained,
+        learning_rate=args.learning_rate,
+    )
+
+    best_model_path = run_model_dir / "best_model.keras"
+    checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+        filepath=str(best_model_path),
+        monitor="val_accuracy",
+        mode="max",
+        save_best_only=True,
+        save_weights_only=False,
+        verbose=1,
+    )
+    callbacks = [
+        checkpoint_callback,
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=args.early_stopping_patience,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.3,
+            patience=max(1, args.early_stopping_patience // 2),
+            verbose=1,
+        ),
+    ]
+
+    print("\n=== Training {} (Stage 1) ===".format(model_name))
+    history_stage1 = model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=args.epochs,
+        callbacks=callbacks,
+        verbose=1,
+    ).history
+
+    full_history = history_stage1
+
+    if args.fine_tune_epochs > 0:
+        print("\n=== Fine Tuning {} (Stage 2) ===".format(model_name))
+        base_model.trainable = True
+        freeze_until = int(len(base_model.layers) * args.fine_tune_freeze_ratio)
+        for layer in base_model.layers[:freeze_until]:
+            layer.trainable = False
+
+        fine_loss, fine_metrics = build_loss_and_metrics(num_classes)
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=args.fine_tune_learning_rate),
+            loss=fine_loss,
+            metrics=fine_metrics,
+        )
+
+        history_stage2 = model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=args.fine_tune_epochs,
+            callbacks=callbacks,
+            verbose=1,
+        ).history
+        full_history = merge_histories(history_stage1, history_stage2)
+
+    final_model_path = run_model_dir / "final_model.keras"
+    model.save(str(final_model_path))
+
+    if best_model_path.exists():
+        model = tf.keras.models.load_model(str(best_model_path))
+
+    print("\n=== Evaluasi {} ===".format(model_name))
+    y_true = np.array(test_labels[:effective_test_samples], dtype=np.int32)
+    y_pred_prob = model.predict(test_ds, verbose=0)
+    if len(y_pred_prob) != len(y_true):
+        aligned_count = min(len(y_pred_prob), len(y_true))
+        y_pred_prob = y_pred_prob[:aligned_count]
+        y_true = y_true[:aligned_count]
+
+    if is_binary:
+        y_prob = y_pred_prob.reshape(-1)
+        y_pred = (y_prob >= 0.5).astype(np.int32)
+        test_f1 = f1_score(y_true, y_pred, average="binary")
+        try:
+            test_roc_auc = plot_roc_curve_binary(
+                y_true=y_true,
+                y_prob=y_prob,
+                output_path=run_report_dir / "roc_curve.png",
+            )
+        except Exception:
+            test_roc_auc = float("nan")
+    else:
+        y_prob = y_pred_prob
+        y_pred = np.argmax(y_prob, axis=1)
+        test_f1 = f1_score(y_true, y_pred, average="macro")
+        try:
+            test_roc_auc = plot_roc_curve_multiclass(
+                y_true=y_true,
+                y_prob=y_prob,
+                class_names=class_names,
+                output_path=run_report_dir / "roc_curve.png",
+            )
+        except Exception:
+            test_roc_auc = float("nan")
+
+    test_accuracy = accuracy_score(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred)
+    cls_report = classification_report(
+        y_true,
+        y_pred,
+        target_names=class_names,
+        output_dict=True,
+        zero_division=0,
+    )
+
+    metrics_summary = {
+        "accuracy": float(test_accuracy),
+        "f1_score": float(test_f1),
+        "roc_auc": float(test_roc_auc) if not np.isnan(test_roc_auc) else float("nan"),
+        "test_samples": int(len(y_true)),
+        "train_samples_used_per_epoch": int(effective_train_samples),
+        "validation_samples_used": int(effective_validation_samples),
+        "train_samples_total": int(len(train_labels)),
+        "validation_samples_total": int(len(val_labels)),
+        "test_samples_total": int(len(test_labels)),
+    }
+
+    history_df = pd.DataFrame(full_history)
+    history_df.to_csv(str(run_report_dir / "training_history.csv"), index=False)
+
+    classification_df = pd.DataFrame(cls_report).transpose()
+    classification_df.to_csv(str(run_report_dir / "classification_report.csv"))
+
+    cm_df = pd.DataFrame(cm, index=class_names, columns=class_names)
+    cm_df.to_csv(str(run_report_dir / "confusion_matrix.csv"))
+
+    split_df = pd.DataFrame(split_counts).transpose()
+    split_df.to_csv(str(run_report_dir / "split_distribution.csv"))
+
+    metrics_df = pd.DataFrame([metrics_summary])
+    metrics_df.to_csv(str(run_report_dir / "evaluation_metrics.csv"), index=False)
+
+    plot_training_curves(history_df, run_report_dir / "training_curves.png")
+    plot_confusion_matrix(cm, class_names, run_report_dir / "confusion_matrix.png")
+    plot_split_distribution(split_counts, run_report_dir / "split_distribution.png")
+    plot_metrics_table(metrics_summary, run_report_dir / "evaluation_table.png")
+
+    with open(str(run_report_dir / "evaluation_metrics.json"), "w", encoding="utf-8") as fp:
+        json.dump(metrics_summary, fp, indent=2)
+
+    with open(str(run_model_dir / "class_names.json"), "w", encoding="utf-8") as fp:
+        json.dump(class_names, fp, indent=2)
+
+    run_summary_lines = [
+        "Model: {}".format(model_name),
+        "Run ID: {}".format(run_id),
+        "Dataset: {}".format(dataset_dir),
+        "Report dir: {}".format(run_report_dir),
+        "Model dir: {}".format(run_model_dir),
+        "Best model: {}".format(best_model_path),
+        "Final model: {}".format(final_model_path),
+        "Accuracy: {:.4f}".format(metrics_summary["accuracy"]),
+        "F1-score: {:.4f}".format(metrics_summary["f1_score"]),
+        "ROC-AUC: {}".format(
+            "{:.4f}".format(metrics_summary["roc_auc"])
+            if not np.isnan(metrics_summary["roc_auc"])
+            else "NaN"
+        ),
+    ]
+    with open(str(run_report_dir / "summary.txt"), "w", encoding="utf-8") as fp:
+        fp.write("\n".join(run_summary_lines))
+
+    with open(str(report_root / "latest_run.txt"), "w", encoding="utf-8") as fp:
+        fp.write(run_id)
+    with open(str(models_root / "latest_run.txt"), "w", encoding="utf-8") as fp:
+        fp.write(run_id)
+
+    print("\n=== Ringkasan Evaluasi {} ===".format(model_name))
+    print("Accuracy : {:.4f}".format(metrics_summary["accuracy"]))
+    print("F1-score : {:.4f}".format(metrics_summary["f1_score"]))
+    if np.isnan(metrics_summary["roc_auc"]):
+        print("ROC-AUC  : NaN")
+    else:
+        print("ROC-AUC  : {:.4f}".format(metrics_summary["roc_auc"]))
+    print("Report   : {}".format(run_report_dir))
+    print("Model    : {}".format(run_model_dir))
+
+    return {
+        "report_dir": run_report_dir,
+        "model_dir": run_model_dir,
+        "best_model_path": best_model_path,
+        "final_model_path": final_model_path,
+    }
+
+
+def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--dataset-dir", type=str, default="dataset/split", help="Folder dataset hasil split.")
+    parser.add_argument("--image-size", type=int, default=227, help="Ukuran gambar input model.")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size saat training.")
+    parser.add_argument("--epochs", type=int, default=8, help="Jumlah epoch stage 1.")
+    parser.add_argument("--fine-tune-epochs", type=int, default=2, help="Jumlah epoch fine-tuning.")
+    parser.add_argument(
+        "--fine-tune-freeze-ratio",
+        type=float,
+        default=0.7,
+        help="Rasio layer backbone yang dibekukan saat fine-tuning (0-1).",
+    )
+    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate stage 1.")
+    parser.add_argument(
+        "--fine-tune-learning-rate",
+        type=float,
+        default=1e-5,
+        help="Learning rate stage 2 (fine tuning).",
+    )
+    parser.add_argument("--dropout", type=float, default=0.35, help="Dropout head classifier.")
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=4,
+        help="Patience early stopping.",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--max-per-class",
+        type=int,
+        default=None,
+        help="Batasi jumlah data per kelas untuk semua split.",
+    )
+    parser.add_argument(
+        "--max-train-per-class",
+        type=int,
+        default=None,
+        help="Batasi jumlah data per kelas khusus split train.",
+    )
+    parser.add_argument(
+        "--max-validation-per-class",
+        type=int,
+        default=None,
+        help="Batasi jumlah data per kelas khusus split validation.",
+    )
+    parser.add_argument(
+        "--max-test-per-class",
+        type=int,
+        default=None,
+        help="Batasi jumlah data per kelas khusus split testing.",
+    )
+    parser.add_argument(
+        "--train-batch-limit",
+        type=int,
+        default=None,
+        help="Maksimal jumlah batch train per epoch.",
+    )
+    parser.add_argument(
+        "--validation-batch-limit",
+        type=int,
+        default=None,
+        help="Maksimal jumlah batch validation.",
+    )
+    parser.add_argument(
+        "--test-batch-limit",
+        type=int,
+        default=None,
+        help="Maksimal jumlah batch testing.",
+    )
+    parser.add_argument(
+        "--shuffle-buffer-size",
+        type=int,
+        default=2048,
+        help="Ukuran buffer shuffle untuk mengontrol RAM usage.",
+    )
+    parser.add_argument(
+        "--num-parallel-calls",
+        type=int,
+        default=2,
+        help="Jumlah worker paralel saat decode/resize data.",
+    )
+    parser.add_argument(
+        "--prefetch-buffer",
+        type=int,
+        default=1,
+        help="Ukuran prefetch buffer (lebih kecil = lebih hemat memori).",
+    )
+    parser.add_argument(
+        "--gpu-memory-limit-mb",
+        type=int,
+        default=None,
+        help="Batas maksimum memori GPU dalam MB (opsional).",
+    )
+    parser.add_argument(
+        "--mixed-precision",
+        action="store_true",
+        help="Aktifkan mixed precision untuk menghemat memori GPU.",
+    )
+    parser.add_argument(
+        "--no-pretrained",
+        action="store_true",
+        help="Gunakan bobot acak (tanpa pretrained ImageNet).",
+    )
+    return parser

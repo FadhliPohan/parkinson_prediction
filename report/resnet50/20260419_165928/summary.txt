@@ -1,0 +1,10 @@
+Model: resnet50
+Run ID: 20260419_165928
+Dataset: C:\MY DATA\DATA PRIBADI\parkinson_prediction\dataset\split
+Report dir: C:\MY DATA\DATA PRIBADI\parkinson_prediction\report\resnet50\20260419_165928
+Model dir: C:\MY DATA\DATA PRIBADI\parkinson_prediction\trained_models\resnet50\20260419_165928
+Best model: C:\MY DATA\DATA PRIBADI\parkinson_prediction\trained_models\resnet50\20260419_165928\best_model.keras
+Final model: C:\MY DATA\DATA PRIBADI\parkinson_prediction\trained_models\resnet50\20260419_165928\final_model.keras
+Accuracy: 0.5000
+F1-score: 0.0000
+ROC-AUC: 0.4300
