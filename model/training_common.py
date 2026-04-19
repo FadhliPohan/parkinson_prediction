@@ -622,84 +622,120 @@ def run_training_pipeline(
         batch_limit=test_batch_limit,
     )
 
-    model, base_model = build_model(
-        backbone_builder=backbone_builder,
-        preprocess_fn=preprocess_fn,
-        input_shape=input_shape,
-        num_classes=num_classes,
-        dropout_rate=args.dropout,
-        use_pretrained=not args.no_pretrained,
-        learning_rate=args.learning_rate,
-    )
-
     best_model_path = run_model_dir / "best_model.keras"
-    checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-        filepath=str(best_model_path),
-        monitor="val_accuracy",
-        mode="max",
-        save_best_only=True,
-        save_weights_only=False,
-        verbose=1,
-    )
-    callbacks = [
-        checkpoint_callback,
-        tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss",
-            patience=args.early_stopping_patience,
-            restore_best_weights=True,
-            verbose=1,
-        ),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss",
-            factor=0.3,
-            patience=max(1, args.early_stopping_patience // 2),
-            verbose=1,
-        ),
-    ]
-
-    print("\n=== Training {} (Stage 1) ===".format(model_name))
-    history_stage1 = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=args.epochs,
-        callbacks=callbacks,
-        verbose=1,
-    ).history
-
-    full_history = history_stage1
-
-    if args.fine_tune_epochs > 0:
-        print("\n=== Fine Tuning {} (Stage 2) ===".format(model_name))
-        base_model.trainable = True
-        freeze_until = int(len(base_model.layers) * args.fine_tune_freeze_ratio)
-        for layer in base_model.layers[:freeze_until]:
-            layer.trainable = False
-
-        fine_loss, fine_metrics = build_loss_and_metrics(num_classes)
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=args.fine_tune_learning_rate),
-            loss=fine_loss,
-            metrics=fine_metrics,
-        )
-
-        history_stage2 = model.fit(
-            train_ds,
-            validation_data=val_ds,
-            epochs=args.fine_tune_epochs,
-            callbacks=callbacks,
-            verbose=1,
-        ).history
-        full_history = merge_histories(history_stage1, history_stage2)
-
     final_model_path = run_model_dir / "final_model.keras"
-    model.save(str(final_model_path))
+    final_compute_device = compute_device
 
-    if best_model_path.exists():
-        model = tf.keras.models.load_model(str(best_model_path))
+    def _run_training_once(force_cpu: bool) -> Tuple[tf.keras.Model, Dict[str, List[float]]]:
+        device_context = tf.device("/CPU:0") if force_cpu else nullcontext()
+
+        with device_context:
+            model, base_model = build_model(
+                backbone_builder=backbone_builder,
+                preprocess_fn=preprocess_fn,
+                input_shape=input_shape,
+                num_classes=num_classes,
+                dropout_rate=args.dropout,
+                use_pretrained=not args.no_pretrained,
+                learning_rate=args.learning_rate,
+            )
+
+            checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+                filepath=str(best_model_path),
+                monitor="val_accuracy",
+                mode="max",
+                save_best_only=True,
+                save_weights_only=False,
+                verbose=1,
+            )
+            callbacks = [
+                checkpoint_callback,
+                tf.keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    patience=args.early_stopping_patience,
+                    restore_best_weights=True,
+                    verbose=1,
+                ),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss",
+                    factor=0.3,
+                    patience=max(1, args.early_stopping_patience // 2),
+                    verbose=1,
+                ),
+            ]
+
+            device_label = "CPU" if force_cpu else "GPU"
+            print("\n=== Training {} (Stage 1 - {}) ===".format(model_name, device_label))
+            history_stage1 = model.fit(
+                train_ds,
+                validation_data=val_ds,
+                epochs=args.epochs,
+                callbacks=callbacks,
+                verbose=1,
+            ).history
+
+            full_history = history_stage1
+
+            if args.fine_tune_epochs > 0:
+                print("\n=== Fine Tuning {} (Stage 2 - {}) ===".format(model_name, device_label))
+                base_model.trainable = True
+                freeze_until = int(len(base_model.layers) * args.fine_tune_freeze_ratio)
+                for layer in base_model.layers[:freeze_until]:
+                    layer.trainable = False
+
+                fine_loss, fine_metrics = build_loss_and_metrics(num_classes)
+                model.compile(
+                    optimizer=tf.keras.optimizers.Adam(learning_rate=args.fine_tune_learning_rate),
+                    loss=fine_loss,
+                    metrics=fine_metrics,
+                )
+
+                history_stage2 = model.fit(
+                    train_ds,
+                    validation_data=val_ds,
+                    epochs=args.fine_tune_epochs,
+                    callbacks=callbacks,
+                    verbose=1,
+                ).history
+                full_history = merge_histories(history_stage1, history_stage2)
+
+            model.save(str(final_model_path))
+            if best_model_path.exists():
+                model = tf.keras.models.load_model(str(best_model_path))
+            return model, full_history
+
+    try:
+        model, full_history = _run_training_once(force_cpu=compute_device == "cpu")
+    except Exception as exc:
+        can_fallback_to_cpu = (
+            compute_device == "gpu"
+            and not args.disable_cpu_fallback
+            and is_gpu_memory_error(exc)
+        )
+        if not can_fallback_to_cpu:
+            raise
+
+        print("\n[PERINGATAN] GPU penuh saat training: {}".format(exc))
+        print("Mencoba ulang otomatis menggunakan CPU...")
+        tf.keras.backend.clear_session()
+        if best_model_path.exists():
+            best_model_path.unlink()
+        if final_model_path.exists():
+            final_model_path.unlink()
+        activate_cpu_mode(
+            "GPU kehabisan memori (OOM).",
+            cpu_thread_limit=cpu_thread_limit,
+            max_cpu_usage_percent=args.max_cpu_usage_percent,
+        )
+        apply_runtime_optimizations(enable_mixed_precision=args.mixed_precision, using_gpu=False)
+        final_compute_device = "cpu"
+        model, full_history = _run_training_once(force_cpu=True)
 
     print("\n=== Evaluasi {} ===".format(model_name))
     y_true = np.array(test_labels[:effective_test_samples], dtype=np.int32)
-    y_pred_prob = model.predict(test_ds, verbose=0)
+    predict_context = tf.device("/CPU:0") if final_compute_device == "cpu" else nullcontext()
+    with predict_context:
+        y_pred_prob = model.predict(test_ds, verbose=0)
     if len(y_pred_prob) != len(y_true):
         aligned_count = min(len(y_pred_prob), len(y_true))
         y_pred_prob = y_pred_prob[:aligned_count]
@@ -742,6 +778,7 @@ def run_training_pipeline(
     )
 
     metrics_summary = {
+        "device_used": final_compute_device,
         "accuracy": float(test_accuracy),
         "f1_score": float(test_f1),
         "roc_auc": float(test_roc_auc) if not np.isnan(test_roc_auc) else float("nan"),
