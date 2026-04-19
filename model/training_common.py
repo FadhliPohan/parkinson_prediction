@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import random
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -31,9 +33,61 @@ def set_global_seed(seed: int) -> None:
     tf.random.set_seed(seed)
 
 
-def ensure_gpu_available(gpu_memory_limit_mb: Optional[int] = None) -> None:
+def configure_cpu_runtime(
+    max_cpu_usage_percent: int,
+    cpu_thread_limit: Optional[int] = None,
+) -> int:
+    total_logical_cpu = os.cpu_count() or 1
+    safe_percent = min(100, max(10, int(max_cpu_usage_percent)))
+    auto_thread_limit = max(1, int(total_logical_cpu * (safe_percent / 100.0)))
+    thread_limit = auto_thread_limit
+    if cpu_thread_limit is not None and cpu_thread_limit > 0:
+        thread_limit = max(1, min(total_logical_cpu, int(cpu_thread_limit)))
+
+    inter_op_threads = max(1, min(4, thread_limit // 2 if thread_limit > 1 else 1))
+    try:
+        tf.config.threading.set_intra_op_parallelism_threads(thread_limit)
+        tf.config.threading.set_inter_op_parallelism_threads(inter_op_threads)
+    except Exception as exc:
+        print("Peringatan: gagal mengatur batas thread CPU -> {}".format(exc))
+
+    print("\n=== Kontrol CPU ===")
+    print("Logical CPU terdeteksi    :", total_logical_cpu)
+    print("Target maksimal CPU (%)   :", safe_percent)
+    print("Batas thread CPU aktif    :", thread_limit)
+    return thread_limit
+
+
+def activate_cpu_mode(reason: str, cpu_thread_limit: int, max_cpu_usage_percent: int) -> None:
+    print("\n[CPU Fallback] {}".format(reason))
+    try:
+        tf.config.set_visible_devices([], "GPU")
+    except Exception:
+        # Aman diabaikan jika runtime sudah inisialisasi.
+        pass
+    print("Training dilanjutkan di CPU.")
+    print(
+        "Batas CPU: {} thread (target <= {}% logical CPU).".format(
+            cpu_thread_limit, min(100, max(10, int(max_cpu_usage_percent)))
+        )
+    )
+
+
+def configure_compute_device(
+    gpu_memory_limit_mb: Optional[int],
+    allow_cpu_fallback: bool,
+    cpu_thread_limit: int,
+    max_cpu_usage_percent: int,
+) -> str:
     gpu_devices = tf.config.list_physical_devices("GPU")
     if not gpu_devices:
+        if allow_cpu_fallback:
+            activate_cpu_mode(
+                "GPU tidak terdeteksi.",
+                cpu_thread_limit=cpu_thread_limit,
+                max_cpu_usage_percent=max_cpu_usage_percent,
+            )
+            return "cpu"
         print("\n[TRAINING DIBATALKAN] GPU tidak terdeteksi.")
         print("Pastikan TensorFlow GPU dan driver CUDA/cuDNN sudah terpasang dengan benar.")
         raise SystemExit(1)
@@ -44,7 +98,8 @@ def ensure_gpu_available(gpu_memory_limit_mb: Optional[int] = None) -> None:
                 gpu_devices[0],
                 [tf.config.LogicalDeviceConfiguration(memory_limit=gpu_memory_limit_mb)],
             )
-        except Exception:
+        except Exception as exc:
+            print("Peringatan: gagal set batas memori GPU -> {}".format(exc))
             # Jika gagal set limit (mis. runtime sudah inisialisasi), fallback ke memory growth.
             for device in gpu_devices:
                 try:
@@ -64,10 +119,29 @@ def ensure_gpu_available(gpu_memory_limit_mb: Optional[int] = None) -> None:
         print("- {}".format(device.name))
     if gpu_memory_limit_mb is not None and gpu_memory_limit_mb > 0:
         print("Batas memori GPU: {} MB".format(gpu_memory_limit_mb))
+    return "gpu"
 
 
-def apply_runtime_optimizations(enable_mixed_precision: bool) -> None:
+def is_gpu_memory_error(exc: Exception) -> bool:
+    if isinstance(exc, tf.errors.ResourceExhaustedError):
+        return True
+    message = str(exc).lower()
+    memory_keywords = [
+        "resource exhausted",
+        "out of memory",
+        "oom",
+        "cuda_error_out_of_memory",
+        "failed to allocate",
+        "cudnn_status_alloc_failed",
+    ]
+    return any(keyword in message for keyword in memory_keywords)
+
+
+def apply_runtime_optimizations(enable_mixed_precision: bool, using_gpu: bool) -> None:
     if not enable_mixed_precision:
+        return
+    if not using_gpu:
+        print("Mixed precision dilewati karena mode CPU.")
         return
 
     try:
@@ -420,8 +494,20 @@ def run_training_pipeline(
     args: argparse.Namespace,
 ) -> Dict[str, Path]:
     set_global_seed(args.seed)
-    ensure_gpu_available(args.gpu_memory_limit_mb)
-    apply_runtime_optimizations(args.mixed_precision)
+    cpu_thread_limit = configure_cpu_runtime(
+        max_cpu_usage_percent=args.max_cpu_usage_percent,
+        cpu_thread_limit=args.cpu_thread_limit,
+    )
+    compute_device = configure_compute_device(
+        gpu_memory_limit_mb=args.gpu_memory_limit_mb,
+        allow_cpu_fallback=not args.disable_cpu_fallback,
+        cpu_thread_limit=cpu_thread_limit,
+        max_cpu_usage_percent=args.max_cpu_usage_percent,
+    )
+    apply_runtime_optimizations(
+        enable_mixed_precision=args.mixed_precision,
+        using_gpu=compute_device == "gpu",
+    )
 
     project_root = Path(__file__).resolve().parents[1]
     dataset_dir = (project_root / args.dataset_dir).resolve()
@@ -490,6 +576,7 @@ def run_training_pipeline(
     print("Shuffle buffer            :", args.shuffle_buffer_size)
     print("Parallel map calls        :", args.num_parallel_calls)
     print("Prefetch buffer           :", args.prefetch_buffer)
+    print("Device aktif              :", "GPU" if compute_device == "gpu" else "CPU")
     print("Sample train dipakai      :", effective_train_samples, "dari", len(train_labels))
     print("Sample validation dipakai :", effective_validation_samples, "dari", len(val_labels))
     print("Sample test dipakai       :", effective_test_samples, "dari", len(test_labels))
