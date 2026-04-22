@@ -9,9 +9,10 @@ from PIL import Image, UnidentifiedImageError
 SOURCE_DIR = Path("dataset/original")
 OUTPUT_DIR = Path("dataset/praprosesing")
 TARGET_SIZE: Tuple[int, int] = (227, 227)
-ROTATION_ANGLES = [90, 180, 270]
+ROTATION_ANGLES = [90]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 CLEAN_OUTPUT_FIRST = False
+SPLIT_OUTPUT_DIR = Path("dataset/split")
 
 
 def get_resample_filter():
@@ -28,6 +29,76 @@ def list_image_files(folder: Path) -> List[Path]:
             if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS
         ]
     )
+
+
+def count_image_files_recursive(root_dir: Path) -> int:
+    if not root_dir.exists():
+        return 0
+    return sum(
+        1
+        for file in root_dir.rglob("*")
+        if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def delete_image_files_recursive(root_dir: Path) -> int:
+    if not root_dir.exists():
+        return 0
+
+    deleted_count = 0
+    for file in sorted(root_dir.rglob("*")):
+        if not file.is_file() or file.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        try:
+            file.unlink()
+            deleted_count += 1
+        except PermissionError:
+            try:
+                os.chmod(str(file), stat.S_IWRITE)
+                file.unlink()
+                deleted_count += 1
+            except PermissionError:
+                print("Peringatan: file terkunci, tidak bisa dihapus -> {}".format(file))
+    return deleted_count
+
+
+def ask_confirmation(prompt_text: str, default_no: bool = True) -> bool:
+    default_label = "y/N" if default_no else "Y/n"
+    user_input = input("{} [{}]: ".format(prompt_text, default_label)).strip().lower()
+    if not user_input:
+        return not default_no
+    if user_input in ("y", "yes"):
+        return True
+    if user_input in ("n", "no"):
+        return False
+    print("Input tidak valid. Proses dibatalkan.")
+    return False
+
+
+def confirm_reprocess_if_existing() -> None:
+    existing_preprocessed = count_image_files_recursive(OUTPUT_DIR)
+    existing_split = count_image_files_recursive(SPLIT_OUTPUT_DIR)
+
+    if existing_preprocessed == 0 and existing_split == 0:
+        return
+
+    print("\n=== Konfirmasi Preprocessing Ulang ===")
+    if existing_preprocessed > 0:
+        print("Data praprosesing sudah ada: {} file".format(existing_preprocessed))
+    if existing_split > 0:
+        print("Data split sudah ada      : {} file".format(existing_split))
+    print("Jika dilanjutkan, proses praprosesing akan dijalankan ulang.")
+
+    is_confirmed = ask_confirmation("Yakin ingin lanjut preprocessing ulang?")
+    if not is_confirmed:
+        print("Preprocessing dibatalkan oleh pengguna.")
+        raise SystemExit(0)
+
+    deleted_preprocessed = delete_image_files_recursive(OUTPUT_DIR)
+    deleted_split = delete_image_files_recursive(SPLIT_OUTPUT_DIR)
+    print("Data lama dibersihkan:")
+    print("- {} file dihapus dari {}".format(deleted_preprocessed, OUTPUT_DIR.resolve()))
+    print("- {} file dihapus dari {}".format(deleted_split, SPLIT_OUTPUT_DIR.resolve()))
 
 
 def reset_output_dirs(class_names: List[str]) -> None:
@@ -93,6 +164,7 @@ def process_dataset() -> None:
         raise FileNotFoundError(
             "Folder sumber tidak ditemukan: {}".format(SOURCE_DIR.resolve())
         )
+    confirm_reprocess_if_existing()
 
     class_dirs = sorted([p for p in SOURCE_DIR.iterdir() if p.is_dir()])
     if not class_dirs:

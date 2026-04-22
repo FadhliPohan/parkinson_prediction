@@ -1,4 +1,4 @@
-tensorflow==2.21.0
+tensorflow[and-cuda]==2.21.0
 numpy==2.4.4
 pandas==3.0.2
 matplotlib==3.10.8
@@ -6,3 +6,4 @@ seaborn==0.13.2
 scikit-learn==1.8.0
 pillow==12.2.0
 streamlit==1.56.0
+ultralytics==8.3.161

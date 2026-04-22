@@ -1,8 +1,21 @@
-﻿# Ignore all dataset files/folders (local only, do not push)
+# Local dataset (jangan dipush)
 dataset/
 dataset/**
 
+# Environment lokal
 .venv/
 venv/
 
+# Python cache
 __pycache__/
+*.pyc
+
+# Artefak training/report (ukuran besar, tidak perlu dipush)
+report/
+report/**
+trained_models/
+trained_models/**
+
+# Artefak visual/log lokal
+dataset_distribution.png
+*.log

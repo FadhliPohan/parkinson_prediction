@@ -767,11 +767,13 @@ def run_training_pipeline(
         except Exception:
             test_roc_auc = float("nan")
 
+    label_indices = list(range(num_classes))
     test_accuracy = accuracy_score(y_true, y_pred)
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=label_indices)
     cls_report = classification_report(
         y_true,
         y_pred,
+        labels=label_indices,
         target_names=class_names,
         output_dict=True,
         zero_division=0,
@@ -824,6 +826,7 @@ def run_training_pipeline(
         "Model dir: {}".format(run_model_dir),
         "Best model: {}".format(best_model_path),
         "Final model: {}".format(final_model_path),
+        "Device: {}".format(final_compute_device),
         "Accuracy: {:.4f}".format(metrics_summary["accuracy"]),
         "F1-score: {:.4f}".format(metrics_summary["f1_score"]),
         "ROC-AUC: {}".format(
@@ -841,6 +844,7 @@ def run_training_pipeline(
         fp.write(run_id)
 
     print("\n=== Ringkasan Evaluasi {} ===".format(model_name))
+    print("Device   : {}".format(final_compute_device.upper()))
     print("Accuracy : {:.4f}".format(metrics_summary["accuracy"]))
     print("F1-score : {:.4f}".format(metrics_summary["f1_score"]))
     if np.isnan(metrics_summary["roc_auc"]):
@@ -951,6 +955,23 @@ def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Batas maksimum memori GPU dalam MB (opsional).",
+    )
+    parser.add_argument(
+        "--max-cpu-usage-percent",
+        type=int,
+        default=70,
+        help="Target maksimum penggunaan logical CPU dalam persen saat training.",
+    )
+    parser.add_argument(
+        "--cpu-thread-limit",
+        type=int,
+        default=None,
+        help="Batas absolut thread CPU (opsional, override persen).",
+    )
+    parser.add_argument(
+        "--disable-cpu-fallback",
+        action="store_true",
+        help="Nonaktifkan fallback otomatis ke CPU saat GPU tidak tersedia/penuh.",
     )
     parser.add_argument(
         "--mixed-precision",

@@ -9,6 +9,11 @@ import streamlit as st
 import tensorflow as tf
 from PIL import Image
 
+try:
+    from ultralytics import YOLO
+except Exception:
+    YOLO = None
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATASET_ROOT = PROJECT_ROOT / "dataset"
@@ -73,16 +78,25 @@ def read_latest_run_id(base_dir: Path) -> Optional[str]:
 
 def resolve_model_file(run_dir: Path) -> Optional[Path]:
     best_path = run_dir / "best_model.keras"
+    best_pt_path = run_dir / "best_model.pt"
     final_path = run_dir / "final_model.keras"
+    final_pt_path = run_dir / "final_model.pt"
 
     if best_path.exists():
         return best_path
+    if best_pt_path.exists():
+        return best_pt_path
     if final_path.exists():
         return final_path
+    if final_pt_path.exists():
+        return final_pt_path
 
     keras_files = sorted(run_dir.glob("*.keras"))
     if keras_files:
         return keras_files[0]
+    pt_files = sorted(run_dir.glob("*.pt"))
+    if pt_files:
+        return pt_files[0]
     return None
 
 
@@ -101,11 +115,36 @@ def load_model_bundle(model_name: str, run_id: str, model_file: str) -> Dict[str
     run_dir = TRAINED_MODELS_ROOT / model_name / run_id
     class_names_path = run_dir / "class_names.json"
     class_names = load_json(class_names_path)
+    framework = "tensorflow"
+
+    if model_file.lower().endswith(".pt"):
+        if YOLO is None:
+            raise ImportError("ultralytics belum terinstall, model YOLOv8 tidak bisa dimuat.")
+        model = YOLO(model_file)
+        framework = "yolo"
+
+        if not isinstance(class_names, list) or not class_names:
+            yolo_names = getattr(model, "names", None)
+            if isinstance(yolo_names, dict):
+                def _safe_key(item):
+                    key = item[0]
+                    try:
+                        return (0, int(key))
+                    except Exception:
+                        return (1, str(key))
+
+                class_names = [name for _, name in sorted(yolo_names.items(), key=_safe_key)]
+            elif isinstance(yolo_names, list):
+                class_names = yolo_names
+            else:
+                class_names = []
+    else:
+        model = tf.keras.models.load_model(model_file)
+
     if not isinstance(class_names, list) or not class_names:
         class_names = ["class_0", "class_1"]
 
-    model = tf.keras.models.load_model(model_file)
-    return {"model": model, "class_names": class_names}
+    return {"model": model, "class_names": class_names, "framework": framework}
 
 
 def build_overview_table(distribution: Dict[str, int], source_name: str) -> pd.DataFrame:
@@ -174,6 +213,11 @@ def prepare_input_image(
     return batch
 
 
+def prepare_yolo_input_image(image_bytes: bytes) -> np.ndarray:
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    return np.asarray(image, dtype=np.uint8)
+
+
 def predict_with_model(
     model_name: str,
     run_id: str,
@@ -187,18 +231,29 @@ def predict_with_model(
     bundle = load_model_bundle(model_name, run_id, str(model_file))
     model = bundle["model"]
     class_names = bundle["class_names"]
+    framework = str(bundle.get("framework", "tensorflow"))
 
-    input_shape = model.input_shape
-    target_height = int(input_shape[1]) if len(input_shape) > 2 and input_shape[1] else 227
-    target_width = int(input_shape[2]) if len(input_shape) > 2 and input_shape[2] else 227
+    if framework == "yolo":
+        input_image = prepare_yolo_input_image(image_bytes)
+        prediction = model.predict(source=input_image, verbose=False)
+        if not prediction:
+            raise RuntimeError("Prediksi YOLOv8 tidak menghasilkan output.")
+        probs_tensor = prediction[0].probs
+        if probs_tensor is None:
+            raise RuntimeError("Output prediksi YOLOv8 tidak memiliki probabilitas kelas.")
+        probs_raw = np.asarray(probs_tensor.data.cpu(), dtype=np.float32).reshape(-1)
+    else:
+        input_shape = model.input_shape
+        target_height = int(input_shape[1]) if len(input_shape) > 2 and input_shape[1] else 227
+        target_width = int(input_shape[2]) if len(input_shape) > 2 and input_shape[2] else 227
 
-    input_batch = prepare_input_image(
-        image_bytes=image_bytes,
-        target_size=(target_width, target_height),
-        model_name=model_name,
-    )
-    prediction = model.predict(input_batch, verbose=0)
-    probs_raw = np.asarray(prediction).reshape(-1)
+        input_batch = prepare_input_image(
+            image_bytes=image_bytes,
+            target_size=(target_width, target_height),
+            model_name=model_name,
+        )
+        prediction = model.predict(input_batch, verbose=0)
+        probs_raw = np.asarray(prediction).reshape(-1)
 
     if probs_raw.size == 1:
         positive_prob = float(probs_raw[0])
