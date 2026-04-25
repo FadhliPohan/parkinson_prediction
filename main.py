@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -228,6 +228,18 @@ def run_training_script(script_path: Path, model_name: str, args: List[str]) -> 
     return run_python_script(script_path, args)
 
 
+def run_training_sequence(
+    training_jobs: List[Tuple[str, str, Path]],
+    args: List[str],
+) -> bool:
+    for display_name, model_name, script_path in training_jobs:
+        rc = run_training_script(script_path, model_name, args)
+        if rc is not None and rc != 0:
+            print("Training {} gagal/dibatalkan, sequence dihentikan.".format(display_name))
+            return False
+    return True
+
+
 def print_menu() -> None:
     print("\n" + "=" * 60)
     print("Pipeline Klasifikasi Parkinson")
@@ -238,10 +250,15 @@ def print_menu() -> None:
     print("4. Split data (train/testing/validation)")
     print("5. Training MobileNetV2")
     print("6. Training ResNet50")
-    print("7. Training YOLOv8")
-    print("8. Training semua model (MobileNetV2 + ResNet50 + YOLOv8)")
-    print("9. Jalankan pipeline penuh (2 -> 8)")
-    print("10. Jalankan Dashboard Streamlit")
+    print("7. Training VGG19")
+    print("8. Training ResNet152")
+    print("9. Training Inception (GoogLeNet style)")
+    print("10. Training EfficientNet")
+    print("11. Training DenseNet121")
+    print("12. Training YOLOv8")
+    print("13. Training semua model (CNN + YOLOv8)")
+    print("14. Jalankan pipeline penuh (2 -> 13)")
+    print("15. Jalankan Dashboard Streamlit")
     print("0. Keluar")
 
 
@@ -250,9 +267,35 @@ def main() -> None:
     augment_script = PROJECT_ROOT / "2.augmentasi.py"
     split_script = PROJECT_ROOT / "3.split_data_testing.py"
     mobilenet_script = PROJECT_ROOT / "model" / "mobilenetv2.py"
-    resnet_script = PROJECT_ROOT / "model" / "resnet50.py"
+    resnet50_script = PROJECT_ROOT / "model" / "resnet50.py"
+    vgg19_script = PROJECT_ROOT / "model" / "vgg19.py"
+    resnet152_script = PROJECT_ROOT / "model" / "resnet152.py"
+    inception_googlenet_script = PROJECT_ROOT / "model" / "inception_googlenet.py"
+    efficientnet_script = PROJECT_ROOT / "model" / "efficientnet.py"
+    densenet121_script = PROJECT_ROOT / "model" / "densenet121.py"
     yolov8_script = PROJECT_ROOT / "model" / "yolov8.py"
     streamlit_app = PROJECT_ROOT / "web" / "app.py"
+
+    single_training_jobs = {
+        "5": ("MobileNetV2", "mobilenetv2", mobilenet_script),
+        "6": ("ResNet50", "resnet50", resnet50_script),
+        "7": ("VGG19", "vgg19", vgg19_script),
+        "8": ("ResNet152", "resnet152", resnet152_script),
+        "9": ("Inception (GoogLeNet style)", "inception_googlenet", inception_googlenet_script),
+        "10": ("EfficientNet", "efficientnet", efficientnet_script),
+        "11": ("DenseNet121", "densenet121", densenet121_script),
+        "12": ("YOLOv8", "yolov8", yolov8_script),
+    }
+    all_training_jobs = [
+        ("MobileNetV2", "mobilenetv2", mobilenet_script),
+        ("ResNet50", "resnet50", resnet50_script),
+        ("VGG19", "vgg19", vgg19_script),
+        ("ResNet152", "resnet152", resnet152_script),
+        ("Inception (GoogLeNet style)", "inception_googlenet", inception_googlenet_script),
+        ("EfficientNet", "efficientnet", efficientnet_script),
+        ("DenseNet121", "densenet121", densenet121_script),
+        ("YOLOv8", "yolov8", yolov8_script),
+    ]
 
     while True:
         print_menu()
@@ -266,27 +309,14 @@ def main() -> None:
             run_python_script(augment_script)
         elif choice == "4":
             run_python_script(split_script)
-        elif choice == "5":
+        elif choice in single_training_jobs:
             args = build_training_args()
-            run_training_script(mobilenet_script, "mobilenetv2", args)
-        elif choice == "6":
+            _, model_name, script_path = single_training_jobs[choice]
+            run_training_script(script_path, model_name, args)
+        elif choice == "13":
             args = build_training_args()
-            run_training_script(resnet_script, "resnet50", args)
-        elif choice == "7":
-            args = build_training_args()
-            run_training_script(yolov8_script, "yolov8", args)
-        elif choice == "8":
-            args = build_training_args()
-            first_rc = run_training_script(mobilenet_script, "mobilenetv2", args)
-            if first_rc is not None and first_rc != 0:
-                print("Training MobileNetV2 gagal/dibatalkan, model berikutnya tidak dijalankan.")
-                continue
-            second_rc = run_training_script(resnet_script, "resnet50", args)
-            if second_rc is not None and second_rc != 0:
-                print("Training ResNet50 gagal/dibatalkan, YOLOv8 tidak dijalankan.")
-                continue
-            run_training_script(yolov8_script, "yolov8", args)
-        elif choice == "9":
+            run_training_sequence(all_training_jobs, args)
+        elif choice == "14":
             rc = run_python_script(check_script)
             if rc != 0:
                 continue
@@ -298,16 +328,8 @@ def main() -> None:
                 continue
 
             args = build_training_args()
-            first_rc = run_training_script(mobilenet_script, "mobilenetv2", args)
-            if first_rc is not None and first_rc != 0:
-                print("Training MobileNetV2 gagal/dibatalkan, model berikutnya tidak dijalankan.")
-                continue
-            second_rc = run_training_script(resnet_script, "resnet50", args)
-            if second_rc is not None and second_rc != 0:
-                print("Training ResNet50 gagal/dibatalkan, YOLOv8 tidak dijalankan.")
-                continue
-            run_training_script(yolov8_script, "yolov8", args)
-        elif choice == "10":
+            run_training_sequence(all_training_jobs, args)
+        elif choice == "15":
             if not streamlit_app.exists():
                 print("File dashboard tidak ditemukan:", streamlit_app)
                 continue
