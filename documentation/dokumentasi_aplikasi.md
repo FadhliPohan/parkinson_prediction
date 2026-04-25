@@ -7,12 +7,12 @@ Pipeline utama:
 1. `1.check_dataset.py` -> cek distribusi dataset original.
 2. `2.augmentasi.py` -> resize + augmentasi rotasi, output ke `dataset/praprosesing`.
 3. `3.split_data_testing.py` -> split train/testing/validation ke `dataset/split`.
-4. Training model CNN/YOLOv8.
+4. Training model CNN/Transformer/YOLOv8.
 5. Monitoring hasil + inferensi di `web/app.py`.
 
 ## 2. Teknologi
 - Python
-- TensorFlow + Keras (model CNN)
+- TensorFlow + Keras (model CNN + Transformer)
 - PyTorch + Ultralytics YOLOv8
 - Scikit-learn (metrik evaluasi)
 - Streamlit (dashboard)
@@ -35,6 +35,10 @@ parkinson_prediction/
 |  |- inception_googlenet.py
 |  |- efficientnet.py
 |  |- densenet121.py
+|  |- transformer_backbones.py
+|  |- vit.py
+|  |- swintransformer.py
+|  |- deit.py
 |  |- yolov8.py
 |- report/
 |- trained_models/
@@ -46,7 +50,7 @@ parkinson_prediction/
 ```
 
 ## 4. Model yang Didukung
-Model CNN menggunakan `training_common.py` (pipeline training, evaluasi, plotting, dan penyimpanan artifact seragam).
+Model CNN dan Transformer menggunakan `training_common.py` (pipeline training, evaluasi, plotting, dan penyimpanan artifact seragam).
 
 1. MobileNetV2
 - Script: `model/mobilenetv2.py`
@@ -78,7 +82,19 @@ Model CNN menggunakan `training_common.py` (pipeline training, evaluasi, plottin
 - Script: `model/densenet121.py`
 - `model_name`: `densenet121`
 
-8. YOLOv8
+8. ViT (Vision Transformer)
+- Script: `model/vit.py`
+- `model_name`: `vit`
+
+9. SwinTransformer
+- Script: `model/swintransformer.py`
+- `model_name`: `swintransformer`
+
+10. DeiT
+- Script: `model/deit.py`
+- `model_name`: `deit`
+
+11. YOLOv8
 - Script: `model/yolov8.py`
 - `model_name`: `yolov8`
 
@@ -100,10 +116,13 @@ Menu yang tersedia:
 9. Training Inception (GoogLeNet style)
 10. Training EfficientNet
 11. Training DenseNet121
-12. Training YOLOv8
-13. Training semua model (CNN + YOLOv8)
-14. Jalankan pipeline penuh (2 -> 13)
-15. Jalankan dashboard Streamlit
+12. Training ViT (Vision Transformer)
+13. Training SwinTransformer
+14. Training DeiT
+15. Training YOLOv8
+16. Training semua model (CNN + Transformer + YOLOv8)
+17. Jalankan pipeline penuh (2 -> 16)
+18. Jalankan dashboard Streamlit
 
 ### B. Menjalankan Training Langsung per Script
 Contoh:
@@ -113,11 +132,14 @@ python model/resnet152.py
 python model/inception_googlenet.py
 python model/efficientnet.py
 python model/densenet121.py
+python model/vit.py
+python model/swintransformer.py
+python model/deit.py
 ```
 
-Semua script CNN menerima argumen training umum, contoh:
+Semua script CNN/Transformer menerima argumen training umum, contoh:
 ```bash
-python model/vgg19.py --epochs 8 --fine-tune-epochs 2 --batch-size 16 --mixed-precision
+python model/vit.py --epochs 8 --fine-tune-epochs 2 --batch-size 16 --mixed-precision
 ```
 
 ### C. Menjalankan Dashboard
@@ -169,10 +191,10 @@ Dashboard memiliki 3 tab:
 ## 8. Catatan Implementasi
 1. Fallback CPU otomatis tersedia saat GPU tidak ada/penuh (tergantung konfigurasi).
 2. Mixed precision bisa diaktifkan via flag `--mixed-precision` untuk hemat memori GPU.
-3. Input size default CNN adalah `227x227`, sedangkan YOLOv8 default `224` (bisa diubah via argumen).
+3. Input size default CNN/Transformer adalah `227x227`, sedangkan YOLOv8 default `224` (bisa diubah via argumen).
 4. Folder dasar model baru sudah disiapkan:
-- `report/vgg19`, `report/resnet152`, `report/inception_googlenet`, `report/efficientnet`, `report/densenet121`
-- `trained_models/vgg19`, `trained_models/resnet152`, `trained_models/inception_googlenet`, `trained_models/efficientnet`, `trained_models/densenet121`
+- `report/vgg19`, `report/resnet152`, `report/inception_googlenet`, `report/efficientnet`, `report/densenet121`, `report/vit`, `report/swintransformer`, `report/deit`
+- `trained_models/vgg19`, `trained_models/resnet152`, `trained_models/inception_googlenet`, `trained_models/efficientnet`, `trained_models/densenet121`, `trained_models/vit`, `trained_models/swintransformer`, `trained_models/deit`
 
 ## 9. Troubleshooting Singkat
 1. GPU tidak terdeteksi

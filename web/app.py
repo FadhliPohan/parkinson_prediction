@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,6 +22,20 @@ REPORT_ROOT = PROJECT_ROOT / "report"
 TRAINED_MODELS_ROOT = PROJECT_ROOT / "trained_models"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
+MODEL_DIR = PROJECT_ROOT / "model"
+if str(MODEL_DIR) not in sys.path:
+    sys.path.insert(0, str(MODEL_DIR))
+
+try:
+    from transformer_backbones import TRANSFORMER_CUSTOM_OBJECTS
+except Exception:
+    TRANSFORMER_CUSTOM_OBJECTS = {}
+
+
+def preprocess_transformer_input(inputs: np.ndarray) -> np.ndarray:
+    return (inputs.astype(np.float32) / 127.5) - 1.0
+
+
 MODEL_PREPROCESSORS = {
     "mobilenetv2": tf.keras.applications.mobilenet_v2.preprocess_input,
     "resnet50": tf.keras.applications.resnet50.preprocess_input,
@@ -29,6 +44,9 @@ MODEL_PREPROCESSORS = {
     "inception_googlenet": tf.keras.applications.inception_v3.preprocess_input,
     "efficientnet": tf.keras.applications.efficientnet.preprocess_input,
     "densenet121": tf.keras.applications.densenet.preprocess_input,
+    "vit": preprocess_transformer_input,
+    "swintransformer": preprocess_transformer_input,
+    "deit": preprocess_transformer_input,
 }
 
 
@@ -144,7 +162,11 @@ def load_model_bundle(model_name: str, run_id: str, model_file: str) -> Dict[str
             else:
                 class_names = []
     else:
-        model = tf.keras.models.load_model(model_file)
+        model = tf.keras.models.load_model(
+            model_file,
+            custom_objects=TRANSFORMER_CUSTOM_OBJECTS,
+            compile=False,
+        )
 
     if not isinstance(class_names, list) or not class_names:
         class_names = ["class_0", "class_1"]

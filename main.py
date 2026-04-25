@@ -255,10 +255,13 @@ def print_menu() -> None:
     print("9. Training Inception (GoogLeNet style)")
     print("10. Training EfficientNet")
     print("11. Training DenseNet121")
-    print("12. Training YOLOv8")
-    print("13. Training semua model (CNN + YOLOv8)")
-    print("14. Jalankan pipeline penuh (2 -> 13)")
-    print("15. Jalankan Dashboard Streamlit")
+    print("12. Training ViT (Vision Transformer)")
+    print("13. Training SwinTransformer")
+    print("14. Training DeiT")
+    print("15. Training YOLOv8")
+    print("16. Training semua model (CNN + Transformer + YOLOv8)")
+    print("17. Jalankan pipeline penuh (2 -> 16)")
+    print("18. Jalankan Dashboard Streamlit")
     print("0. Keluar")
 
 
@@ -273,6 +276,9 @@ def main() -> None:
     inception_googlenet_script = PROJECT_ROOT / "model" / "inception_googlenet.py"
     efficientnet_script = PROJECT_ROOT / "model" / "efficientnet.py"
     densenet121_script = PROJECT_ROOT / "model" / "densenet121.py"
+    vit_script = PROJECT_ROOT / "model" / "vit.py"
+    swintransformer_script = PROJECT_ROOT / "model" / "swintransformer.py"
+    deit_script = PROJECT_ROOT / "model" / "deit.py"
     yolov8_script = PROJECT_ROOT / "model" / "yolov8.py"
     streamlit_app = PROJECT_ROOT / "web" / "app.py"
 
@@ -284,7 +290,10 @@ def main() -> None:
         "9": ("Inception (GoogLeNet style)", "inception_googlenet", inception_googlenet_script),
         "10": ("EfficientNet", "efficientnet", efficientnet_script),
         "11": ("DenseNet121", "densenet121", densenet121_script),
-        "12": ("YOLOv8", "yolov8", yolov8_script),
+        "12": ("ViT", "vit", vit_script),
+        "13": ("SwinTransformer", "swintransformer", swintransformer_script),
+        "14": ("DeiT", "deit", deit_script),
+        "15": ("YOLOv8", "yolov8", yolov8_script),
     }
     all_training_jobs = [
         ("MobileNetV2", "mobilenetv2", mobilenet_script),
@@ -294,6 +303,9 @@ def main() -> None:
         ("Inception (GoogLeNet style)", "inception_googlenet", inception_googlenet_script),
         ("EfficientNet", "efficientnet", efficientnet_script),
         ("DenseNet121", "densenet121", densenet121_script),
+        ("ViT", "vit", vit_script),
+        ("SwinTransformer", "swintransformer", swintransformer_script),
+        ("DeiT", "deit", deit_script),
         ("YOLOv8", "yolov8", yolov8_script),
     ]
 
@@ -313,10 +325,10 @@ def main() -> None:
             args = build_training_args()
             _, model_name, script_path = single_training_jobs[choice]
             run_training_script(script_path, model_name, args)
-        elif choice == "13":
+        elif choice == "16":
             args = build_training_args()
             run_training_sequence(all_training_jobs, args)
-        elif choice == "14":
+        elif choice == "17":
             rc = run_python_script(check_script)
             if rc != 0:
                 continue
@@ -329,7 +341,7 @@ def main() -> None:
 
             args = build_training_args()
             run_training_sequence(all_training_jobs, args)
-        elif choice == "15":
+        elif choice == "18":
             if not streamlit_app.exists():
                 print("File dashboard tidak ditemukan:", streamlit_app)
                 continue

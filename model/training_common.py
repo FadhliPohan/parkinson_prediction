@@ -492,6 +492,7 @@ def run_training_pipeline(
     backbone_builder: Callable,
     preprocess_fn: Callable,
     args: argparse.Namespace,
+    custom_objects: Optional[Dict[str, object]] = None,
 ) -> Dict[str, Path]:
     set_global_seed(args.seed)
     cpu_thread_limit = configure_cpu_runtime(
@@ -701,7 +702,11 @@ def run_training_pipeline(
 
             model.save(str(final_model_path))
             if best_model_path.exists():
-                model = tf.keras.models.load_model(str(best_model_path))
+                model = tf.keras.models.load_model(
+                    str(best_model_path),
+                    custom_objects=custom_objects,
+                    compile=False,
+                )
             return model, full_history
 
     try:
