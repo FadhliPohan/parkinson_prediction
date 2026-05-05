@@ -8,7 +8,7 @@ SPLIT_DIR = Path("dataset/split")
 TRAIN_DIR = SPLIT_DIR / "train"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
-TARGET_SIZE: Tuple[int, int] = (227, 227)
+TARGET_SIZE: Tuple[int, int] = (224, 224)
 ROTATION_FACTOR = 20.0 / 360.0
 TRANSLATION_FACTOR = 0.05
 ZOOM_FACTOR = 0.08

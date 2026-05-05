@@ -5,6 +5,8 @@ import stat
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from PIL import Image
+
 
 SOURCE_DIR = Path("dataset/original")
 OUTPUT_DIR = Path("dataset/split")
@@ -14,6 +16,12 @@ TEST_RATIO = 0.15
 VALIDATION_RATIO = 0.15
 RANDOM_SEED = 42
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+TRAIN_IMAGE_SIZE = (224, 224)
+
+try:
+    BILINEAR_RESAMPLE = Image.Resampling.BILINEAR
+except AttributeError:
+    BILINEAR_RESAMPLE = Image.BILINEAR
 
 
 def list_image_files(folder: Path) -> List[Path]:
@@ -107,13 +115,40 @@ def calculate_split_counts(total_count: int) -> Tuple[int, int, int]:
     return train_count, test_count, validation_count
 
 
+def convert_image_to_rgb(image: Image.Image) -> Image.Image:
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        rgba_image = image.convert("RGBA")
+        background = Image.new("RGB", rgba_image.size, (255, 255, 255))
+        background.paste(rgba_image, mask=rgba_image.getchannel("A"))
+        return background
+    if image.mode != "RGB":
+        return image.convert("RGB")
+    return image
+
+
+def save_split_image(source_path: Path, target_path: Path, target_size: Tuple[int, int] | None) -> None:
+    if target_size is None:
+        shutil.copy2(source_path, target_path)
+        return
+
+    with Image.open(source_path) as image:
+        prepared = convert_image_to_rgb(image)
+        resized = prepared.resize(target_size, resample=BILINEAR_RESAMPLE)
+        save_kwargs = {}
+        if target_path.suffix.lower() in {".jpg", ".jpeg"}:
+            save_kwargs["quality"] = 95
+            save_kwargs["subsampling"] = 0
+        resized.save(target_path, **save_kwargs)
+
+
 def copy_to_split(files: List[Path], class_name: str, split_name: str) -> int:
     destination = OUTPUT_DIR / split_name / class_name
     copied = 0
+    resize_target = TRAIN_IMAGE_SIZE if split_name == "train" else None
 
     for image_path in files:
         target_path = destination / image_path.name
-        shutil.copy2(image_path, target_path)
+        save_split_image(image_path, target_path, resize_target)
         copied += 1
 
     return copied
@@ -123,6 +158,7 @@ def print_split_distribution(class_stats: Dict[str, Dict[str, int]]) -> None:
     print("\n=== Distribusi Split Dataset ===")
     print("Sumber data:", SOURCE_DIR.resolve())
     print("Output data:", OUTPUT_DIR.resolve())
+    print("Ukuran gambar split train:", "{}x{}".format(TRAIN_IMAGE_SIZE[0], TRAIN_IMAGE_SIZE[1]))
     print(
         "Rasio split: train {}% | testing {}% | validation {}%".format(
             int(TRAIN_RATIO * 100),

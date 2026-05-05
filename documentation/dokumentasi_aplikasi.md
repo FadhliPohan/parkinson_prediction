@@ -5,7 +5,7 @@ Aplikasi ini adalah pipeline end-to-end untuk klasifikasi gambar hand-drawing Pa
 
 Pipeline utama:
 1. `1.check_dataset.py` -> cek distribusi dataset original.
-2. `2.split_data_testing.py` -> split train/testing/validation dari `dataset/original` ke `dataset/split`.
+2. `2.split_data_testing.py` -> split train/testing/validation dari `dataset/original` ke `dataset/split`, sekaligus normalisasi file pada split `train` menjadi `224x224`.
 3. `3.augmentasi.py` -> kebijakan augmentasi training on-the-fly untuk split `train` saja.
 4. Training model CNN/Transformer/YOLOv8.
 5. Monitoring hasil + inferensi di `web/app.py`.
@@ -191,7 +191,7 @@ Dashboard memiliki 3 tab:
 ## 8. Catatan Implementasi
 1. Fallback CPU otomatis tersedia saat GPU tidak ada/penuh (tergantung konfigurasi).
 2. Mixed precision bisa diaktifkan via flag `--mixed-precision` untuk hemat memori GPU.
-3. Input size default CNN/Transformer adalah `227x227`, sedangkan YOLOv8 default `224` (bisa diubah via argumen).
+3. Input size default CNN/Transformer dan YOLOv8 adalah `224x224` (bisa diubah via argumen).
 4. Augmentasi train CNN/Transformer dilakukan saat training dengan rotation kecil, translation kecil, zoom ringan, brightness/contrast ringan, Gaussian noise ringan, dan random erasing kecil.
 5. Folder dasar model baru sudah disiapkan:
 - `report/vgg19`, `report/resnet152`, `report/inception_googlenet`, `report/efficientnet`, `report/densenet121`, `report/vit`, `report/swintransformer`, `report/deit`

@@ -271,8 +271,8 @@ def predict_with_model(
         probs_raw = np.asarray(probs_tensor.data.cpu(), dtype=np.float32).reshape(-1)
     else:
         input_shape = model.input_shape
-        target_height = int(input_shape[1]) if len(input_shape) > 2 and input_shape[1] else 227
-        target_width = int(input_shape[2]) if len(input_shape) > 2 and input_shape[2] else 227
+        target_height = int(input_shape[1]) if len(input_shape) > 2 and input_shape[1] else 224
+        target_width = int(input_shape[2]) if len(input_shape) > 2 and input_shape[2] else 224
 
         input_batch = prepare_input_image(
             image_bytes=image_bytes,

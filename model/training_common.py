@@ -936,7 +936,7 @@ def run_training_pipeline(
 def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dataset-dir", type=str, default="dataset/split", help="Folder dataset hasil split.")
-    parser.add_argument("--image-size", type=int, default=227, help="Ukuran gambar input model.")
+    parser.add_argument("--image-size", type=int, default=224, help="Ukuran gambar input model.")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size saat training.")
     parser.add_argument("--epochs", type=int, default=8, help="Jumlah epoch stage 1.")
     parser.add_argument("--fine-tune-epochs", type=int, default=2, help="Jumlah epoch fine-tuning.")
