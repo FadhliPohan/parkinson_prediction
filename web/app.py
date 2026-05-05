@@ -315,25 +315,14 @@ def render_dataset_tab() -> None:
     st.subheader("Ringkasan Dataset")
 
     original_dist = count_class_distribution(DATASET_ROOT / "original")
-    preprocess_dist = count_class_distribution(DATASET_ROOT / "praprosesing")
     split_dist = summarize_split_distribution(DATASET_ROOT / "split")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Dataset Original**")
-        if original_dist:
-            st.dataframe(build_overview_table(original_dist, "original"), use_container_width=True)
-            st.bar_chart(pd.Series(original_dist, name="count"))
-        else:
-            st.info("Folder `dataset/original` belum ditemukan / masih kosong.")
-
-    with col2:
-        st.markdown("**Dataset Praprosesing**")
-        if preprocess_dist:
-            st.dataframe(build_overview_table(preprocess_dist, "praprosesing"), use_container_width=True)
-            st.bar_chart(pd.Series(preprocess_dist, name="count"))
-        else:
-            st.info("Folder `dataset/praprosesing` belum ditemukan / masih kosong.")
+    st.markdown("**Dataset Original**")
+    if original_dist:
+        st.dataframe(build_overview_table(original_dist, "original"), use_container_width=True)
+        st.bar_chart(pd.Series(original_dist, name="count"))
+    else:
+        st.info("Folder `dataset/original` belum ditemukan / masih kosong.")
 
     st.markdown("**Dataset Split (train/testing/validation)**")
     split_df = build_split_table(split_dist)
@@ -343,22 +332,9 @@ def render_dataset_tab() -> None:
     else:
         st.info("Folder `dataset/split` belum ditemukan / masih kosong.")
 
-    if original_dist and preprocess_dist:
-        ratio_rows = []
-        for class_name in sorted(set(list(original_dist.keys()) + list(preprocess_dist.keys()))):
-            original_count = int(original_dist.get(class_name, 0))
-            preprocess_count = int(preprocess_dist.get(class_name, 0))
-            multiplier = (float(preprocess_count) / float(original_count)) if original_count else np.nan
-            ratio_rows.append(
-                {
-                    "class": class_name,
-                    "original": original_count,
-                    "praprosesing": preprocess_count,
-                    "multiplier": multiplier,
-                }
-            )
-        st.markdown("**Rasio Praprosesing terhadap Original**")
-        st.dataframe(pd.DataFrame(ratio_rows), use_container_width=True)
+    st.info(
+        "Augmentasi training berjalan on-the-fly pada split `train`, jadi file gambar di disk tidak digandakan."
+    )
 
 
 def render_report_tab() -> None:

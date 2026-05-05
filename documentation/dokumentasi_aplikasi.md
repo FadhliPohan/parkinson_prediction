@@ -1,12 +1,12 @@
 # Dokumentasi Aplikasi Prediksi Parkinson
 
 ## 1. Ringkasan
-Aplikasi ini adalah pipeline end-to-end untuk klasifikasi gambar hand-drawing Parkinson vs Healthy, mulai dari pengecekan dataset, augmentasi, split data, training multi-arsitektur, evaluasi, sampai dashboard prediksi berbasis Streamlit.
+Aplikasi ini adalah pipeline end-to-end untuk klasifikasi gambar hand-drawing Parkinson vs Healthy, mulai dari pengecekan dataset, split data, augmentasi training on-the-fly, training multi-arsitektur, evaluasi, sampai dashboard prediksi berbasis Streamlit.
 
 Pipeline utama:
 1. `1.check_dataset.py` -> cek distribusi dataset original.
-2. `2.augmentasi.py` -> resize + augmentasi rotasi, output ke `dataset/praprosesing`.
-3. `3.split_data_testing.py` -> split train/testing/validation ke `dataset/split`.
+2. `2.split_data_testing.py` -> split train/testing/validation dari `dataset/original` ke `dataset/split`.
+3. `3.augmentasi.py` -> kebijakan augmentasi training on-the-fly untuk split `train` saja.
 4. Training model CNN/Transformer/YOLOv8.
 5. Monitoring hasil + inferensi di `web/app.py`.
 
@@ -24,7 +24,6 @@ Dependency utama ada di `requirements.txt`.
 parkinson_prediction/
 |- dataset/
 |  |- original/
-|  |- praprosesing/
 |  |- split/
 |- model/
 |  |- training_common.py
@@ -107,8 +106,8 @@ python main.py
 Menu yang tersedia:
 1. Instal dependency + virtual environment
 2. Cek distribusi dataset
-3. Augmentasi data
-4. Split data
+3. Split data
+4. Kebijakan augmentasi training
 5. Training MobileNetV2
 6. Training ResNet50
 7. Training VGG19
@@ -121,7 +120,7 @@ Menu yang tersedia:
 14. Training DeiT
 15. Training YOLOv8
 16. Training semua model (CNN + Transformer + YOLOv8)
-17. Jalankan pipeline penuh (2 -> 16)
+17. Jalankan pipeline penuh (2 -> 4 -> 16)
 18. Jalankan dashboard Streamlit
 
 ### B. Menjalankan Training Langsung per Script
@@ -177,7 +176,8 @@ File `latest_run.txt` otomatis diperbarui pada folder model terkait untuk menand
 Dashboard memiliki 3 tab:
 
 1. Dataset & Praprosesing
-- Ringkasan distribusi `dataset/original`, `dataset/praprosesing`, dan `dataset/split`.
+- Ringkasan distribusi `dataset/original` dan `dataset/split`.
+- Augmentasi training berjalan on-the-fly pada split `train`, sehingga tidak menambah file baru di disk.
 
 2. Training Report
 - Menampilkan ringkasan run terbaru per model.
@@ -192,7 +192,8 @@ Dashboard memiliki 3 tab:
 1. Fallback CPU otomatis tersedia saat GPU tidak ada/penuh (tergantung konfigurasi).
 2. Mixed precision bisa diaktifkan via flag `--mixed-precision` untuk hemat memori GPU.
 3. Input size default CNN/Transformer adalah `227x227`, sedangkan YOLOv8 default `224` (bisa diubah via argumen).
-4. Folder dasar model baru sudah disiapkan:
+4. Augmentasi train CNN/Transformer dilakukan saat training dengan rotation kecil, translation kecil, zoom ringan, brightness/contrast ringan, Gaussian noise ringan, dan random erasing kecil.
+5. Folder dasar model baru sudah disiapkan:
 - `report/vgg19`, `report/resnet152`, `report/inception_googlenet`, `report/efficientnet`, `report/densenet121`, `report/vit`, `report/swintransformer`, `report/deit`
 - `trained_models/vgg19`, `trained_models/resnet152`, `trained_models/inception_googlenet`, `trained_models/efficientnet`, `trained_models/densenet121`, `trained_models/vit`, `trained_models/swintransformer`, `trained_models/deit`
 
@@ -207,7 +208,7 @@ Dashboard memiliki 3 tab:
 - Set `--gpu-memory-limit-mb` sesuai kapasitas.
 
 3. Dataset split kosong
-- Jalankan ulang urutan: check dataset -> augmentasi -> split.
+- Jalankan ulang urutan: check dataset -> split.
 
 4. Dashboard tidak menemukan model
 - Pastikan training sudah berhasil dan artifact ada di `trained_models/<model_name>/<run_id>/`.

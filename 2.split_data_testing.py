@@ -1,12 +1,12 @@
-import random
 import os
-import stat
+import random
 import shutil
+import stat
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-SOURCE_DIR = Path("dataset/praprosesing")
+SOURCE_DIR = Path("dataset/original")
 OUTPUT_DIR = Path("dataset/split")
 SPLIT_NAMES = ["train", "testing", "validation"]
 TRAIN_RATIO = 0.70
@@ -14,7 +14,6 @@ TEST_RATIO = 0.15
 VALIDATION_RATIO = 0.15
 RANDOM_SEED = 42
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-CLEAN_OUTPUT_FIRST = False
 
 
 def list_image_files(folder: Path) -> List[Path]:
@@ -27,6 +26,68 @@ def list_image_files(folder: Path) -> List[Path]:
     )
 
 
+def count_image_files_recursive(root_dir: Path) -> int:
+    if not root_dir.exists():
+        return 0
+    return sum(
+        1
+        for file in root_dir.rglob("*")
+        if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS
+    )
+
+
+def delete_image_files_recursive(root_dir: Path) -> int:
+    if not root_dir.exists():
+        return 0
+
+    deleted_count = 0
+    for file in sorted(root_dir.rglob("*")):
+        if not file.is_file() or file.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        try:
+            file.unlink()
+            deleted_count += 1
+        except PermissionError:
+            try:
+                os.chmod(str(file), stat.S_IWRITE)
+                file.unlink()
+                deleted_count += 1
+            except PermissionError:
+                print("Peringatan: file terkunci, tidak bisa dihapus -> {}".format(file))
+    return deleted_count
+
+
+def ask_confirmation(prompt_text: str, default_no: bool = True) -> bool:
+    default_label = "y/N" if default_no else "Y/n"
+    user_input = input("{} [{}]: ".format(prompt_text, default_label)).strip().lower()
+    if not user_input:
+        return not default_no
+    if user_input in ("y", "yes"):
+        return True
+    if user_input in ("n", "no"):
+        return False
+    print("Input tidak valid. Proses dibatalkan.")
+    return False
+
+
+def confirm_resplit_if_existing() -> None:
+    existing_split = count_image_files_recursive(OUTPUT_DIR)
+    if existing_split == 0:
+        return
+
+    print("\n=== Konfirmasi Split Ulang ===")
+    print("Data split sudah ada: {} file".format(existing_split))
+    print("Jika dilanjutkan, folder split lama akan dibersihkan lalu dibuat ulang.")
+
+    is_confirmed = ask_confirmation("Yakin ingin lanjut split ulang?")
+    if not is_confirmed:
+        print("Split dibatalkan oleh pengguna.")
+        raise SystemExit(0)
+
+    deleted_split = delete_image_files_recursive(OUTPUT_DIR)
+    print("Data split lama dibersihkan: {} file dihapus dari {}".format(deleted_split, OUTPUT_DIR.resolve()))
+
+
 def prepare_split_dirs(class_names: List[str]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -37,18 +98,6 @@ def prepare_split_dirs(class_names: List[str]) -> None:
         for class_name in class_names:
             class_dir = split_dir / class_name
             class_dir.mkdir(parents=True, exist_ok=True)
-
-            if CLEAN_OUTPUT_FIRST:
-                for file in class_dir.iterdir():
-                    if file.is_file():
-                        try:
-                            file.unlink()
-                        except PermissionError:
-                            try:
-                                os.chmod(str(file), stat.S_IWRITE)
-                                file.unlink()
-                            except PermissionError:
-                                print("Peringatan: file terkunci, tidak bisa dihapus -> {}".format(file))
 
 
 def calculate_split_counts(total_count: int) -> Tuple[int, int, int]:
@@ -132,6 +181,8 @@ def run_split() -> None:
     class_dirs = sorted([path for path in SOURCE_DIR.iterdir() if path.is_dir()])
     if not class_dirs:
         raise ValueError("Tidak ada folder kelas pada {}".format(SOURCE_DIR.resolve()))
+
+    confirm_resplit_if_existing()
 
     class_names = [class_dir.name for class_dir in class_dirs]
     prepare_split_dirs(class_names)

@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import json
 import os
 import random
@@ -25,12 +26,47 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AUGMENTATION_SCRIPT_PATH = PROJECT_ROOT / "3.augmentasi.py"
 
 
 def set_global_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
+
+
+def load_train_augmentation_bundle() -> Tuple[tf.keras.layers.Layer, List[str]]:
+    if not AUGMENTATION_SCRIPT_PATH.exists():
+        raise FileNotFoundError(
+            "File augmentasi training tidak ditemukan: {}".format(AUGMENTATION_SCRIPT_PATH.resolve())
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "parkinson_training_augmentation",
+        str(AUGMENTATION_SCRIPT_PATH),
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("Gagal memuat file augmentasi: {}".format(AUGMENTATION_SCRIPT_PATH.resolve()))
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    build_fn = getattr(module, "build_training_augmentation", None)
+    if not callable(build_fn):
+        raise AttributeError(
+            "Fungsi build_training_augmentation() tidak ditemukan di {}".format(
+                AUGMENTATION_SCRIPT_PATH.resolve()
+            )
+        )
+
+    augmenter = build_fn()
+    if not isinstance(augmenter, tf.keras.layers.Layer):
+        raise TypeError("build_training_augmentation() harus mengembalikan tf.keras.layers.Layer.")
+
+    describe_fn = getattr(module, "describe_augmentation_policy", None)
+    policy_lines = describe_fn() if callable(describe_fn) else []
+    return augmenter, [str(line) for line in policy_lines]
 
 
 def configure_cpu_runtime(
@@ -239,6 +275,17 @@ def _decode_and_resize_image(path: tf.Tensor, label: tf.Tensor, image_size: Tupl
     return image, label
 
 
+def _apply_batch_augmentation(
+    images: tf.Tensor,
+    labels: tf.Tensor,
+    train_augmenter: tf.keras.layers.Layer,
+):
+    augmented_images = train_augmenter(images, training=True)
+    augmented_images = tf.cast(augmented_images, tf.float32)
+    augmented_images = tf.clip_by_value(augmented_images, 0.0, 255.0)
+    return augmented_images, labels
+
+
 def make_dataset(
     filepaths: List[str],
     labels: List[int],
@@ -251,6 +298,8 @@ def make_dataset(
     num_parallel_calls: int,
     prefetch_buffer: int,
     batch_limit: Optional[int],
+    apply_train_augmentation: bool = False,
+    train_augmenter: Optional[tf.keras.layers.Layer] = None,
 ) -> tf.data.Dataset:
     dataset = tf.data.Dataset.from_tensor_slices((filepaths, labels))
     options = tf.data.Options()
@@ -274,6 +323,14 @@ def make_dataset(
 
     if batch_limit is not None and batch_limit > 0:
         dataset = dataset.take(batch_limit)
+
+    if apply_train_augmentation:
+        if train_augmenter is None:
+            raise ValueError("train_augmenter wajib diisi saat apply_train_augmentation=True.")
+        dataset = dataset.map(
+            lambda images, batch_labels: _apply_batch_augmentation(images, batch_labels, train_augmenter),
+            num_parallel_calls=map_calls,
+        )
 
     dataset = dataset.prefetch(max(1, int(prefetch_buffer)))
     return dataset
@@ -510,8 +567,7 @@ def run_training_pipeline(
         using_gpu=compute_device == "gpu",
     )
 
-    project_root = Path(__file__).resolve().parents[1]
-    dataset_dir = (project_root / args.dataset_dir).resolve()
+    dataset_dir = (PROJECT_ROOT / args.dataset_dir).resolve()
     ensure_split_structure(dataset_dir)
 
     class_names = get_class_names(dataset_dir)
@@ -519,8 +575,8 @@ def run_training_pipeline(
     num_classes = len(class_names)
     is_binary = num_classes == 2
 
-    report_root = (project_root / "report" / model_name).resolve()
-    models_root = (project_root / "trained_models" / model_name).resolve()
+    report_root = (PROJECT_ROOT / "report" / model_name).resolve()
+    models_root = (PROJECT_ROOT / "trained_models" / model_name).resolve()
     report_root.mkdir(parents=True, exist_ok=True)
     models_root.mkdir(parents=True, exist_ok=True)
 
@@ -582,6 +638,14 @@ def run_training_pipeline(
     print("Sample validation dipakai :", effective_validation_samples, "dari", len(val_labels))
     print("Sample test dipakai       :", effective_test_samples, "dari", len(test_labels))
 
+    train_augmenter, augmentation_policy = load_train_augmentation_bundle()
+    print("\n=== Augmentasi Train On-the-Fly ===")
+    if augmentation_policy:
+        for description in augmentation_policy:
+            print("- {}".format(description))
+    else:
+        print("- Augmentasi train aktif dari 3.augmentasi.py")
+
     input_shape = (args.image_size, args.image_size, 3)
     train_ds = make_dataset(
         train_paths,
@@ -595,6 +659,8 @@ def run_training_pipeline(
         num_parallel_calls=args.num_parallel_calls,
         prefetch_buffer=args.prefetch_buffer,
         batch_limit=train_batch_limit,
+        apply_train_augmentation=True,
+        train_augmenter=train_augmenter,
     )
     val_ds = make_dataset(
         val_paths,

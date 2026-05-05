@@ -246,8 +246,8 @@ def print_menu() -> None:
     print("=" * 60)
     print("1. Instalasi dependency + virtual environment")
     print("2. Check distribusi dataset")
-    print("3. Augmentasi data (resize + rotasi)")
-    print("4. Split data (train/testing/validation)")
+    print("3. Split data (train/testing/validation)")
+    print("4. Kebijakan augmentasi training (train only, on-the-fly)")
     print("5. Training MobileNetV2")
     print("6. Training ResNet50")
     print("7. Training VGG19")
@@ -260,15 +260,15 @@ def print_menu() -> None:
     print("14. Training DeiT")
     print("15. Training YOLOv8")
     print("16. Training semua model (CNN + Transformer + YOLOv8)")
-    print("17. Jalankan pipeline penuh (2 -> 16)")
+    print("17. Jalankan pipeline penuh (2 -> 4 -> 16)")
     print("18. Jalankan Dashboard Streamlit")
     print("0. Keluar")
 
 
 def main() -> None:
     check_script = PROJECT_ROOT / "1.check_dataset.py"
-    augment_script = PROJECT_ROOT / "2.augmentasi.py"
-    split_script = PROJECT_ROOT / "3.split_data_testing.py"
+    split_script = PROJECT_ROOT / "2.split_data_testing.py"
+    augment_script = PROJECT_ROOT / "3.augmentasi.py"
     mobilenet_script = PROJECT_ROOT / "model" / "mobilenetv2.py"
     resnet50_script = PROJECT_ROOT / "model" / "resnet50.py"
     vgg19_script = PROJECT_ROOT / "model" / "vgg19.py"
@@ -318,9 +318,9 @@ def main() -> None:
         elif choice == "2":
             run_python_script(check_script)
         elif choice == "3":
-            run_python_script(augment_script)
-        elif choice == "4":
             run_python_script(split_script)
+        elif choice == "4":
+            run_python_script(augment_script)
         elif choice in single_training_jobs:
             args = build_training_args()
             _, model_name, script_path = single_training_jobs[choice]
@@ -332,10 +332,10 @@ def main() -> None:
             rc = run_python_script(check_script)
             if rc != 0:
                 continue
-            rc = run_python_script(augment_script)
+            rc = run_python_script(split_script)
             if rc != 0:
                 continue
-            rc = run_python_script(split_script)
+            rc = run_python_script(augment_script)
             if rc != 0:
                 continue
 
