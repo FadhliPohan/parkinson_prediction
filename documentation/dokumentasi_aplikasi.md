@@ -120,7 +120,7 @@ Menu yang tersedia:
 14. Training DeiT
 15. Training YOLOv8
 16. Training semua model (CNN + Transformer + YOLOv8)
-17. Jalankan pipeline penuh (2 -> 4 -> 16)
+17. Jalankan pipeline penuh (2 -> 4 -> 16), dengan opsi auto shutdown setelah seluruh pipeline sukses
 18. Jalankan dashboard Streamlit
 
 ### B. Menjalankan Training Langsung per Script

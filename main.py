@@ -1,4 +1,6 @@
 import os
+import getpass
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -132,6 +134,62 @@ def ask_yes_no(prompt_text: str, default_yes: bool) -> bool:
         return False
     print("Input tidak valid. Gunakan default.")
     return default_yes
+
+
+def validate_sudo_password(password: str) -> bool:
+    if os.name != "posix":
+        print("Auto shutdown hanya didukung pada sistem Linux/macOS.")
+        return False
+    if shutil.which("sudo") is None:
+        print("Perintah sudo tidak ditemukan. Auto shutdown tidak bisa diaktifkan.")
+        return False
+
+    result = subprocess.run(
+        ["sudo", "-S", "-k", "-v"],
+        input=password + "\n",
+        text=True,
+        cwd=str(PROJECT_ROOT),
+        env=build_runtime_env(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        print("Password sudo tidak valid. Auto shutdown dibatalkan.")
+        return False
+    return True
+
+
+def ask_auto_shutdown_password() -> Optional[str]:
+    should_shutdown = ask_yes_no(
+        "Matikan PC otomatis setelah pipeline penuh selesai?",
+        False,
+    )
+    if not should_shutdown:
+        return None
+
+    sudo_password = getpass.getpass("Masukkan password sudo: ").strip()
+    if not sudo_password:
+        print("Password kosong. Auto shutdown dibatalkan.")
+        return None
+    if not validate_sudo_password(sudo_password):
+        return None
+
+    print("Auto shutdown aktif. PC akan dimatikan setelah pipeline penuh berakhir.")
+    return sudo_password
+
+
+def shutdown_system(password: str) -> int:
+    print("\nPipeline selesai. Menjalankan shutdown sistem ...")
+    result = subprocess.run(
+        ["sudo", "-S", "-k", "shutdown", "-h", "now"],
+        input=password + "\n",
+        text=True,
+        cwd=str(PROJECT_ROOT),
+        env=build_runtime_env(),
+    )
+    if result.returncode != 0:
+        print("Shutdown otomatis gagal. Exit code:", result.returncode)
+    return result.returncode
 
 
 def build_training_args() -> List[str]:
@@ -329,18 +387,27 @@ def main() -> None:
             args = build_training_args()
             run_training_sequence(all_training_jobs, args)
         elif choice == "17":
+            shutdown_password = ask_auto_shutdown_password()
             rc = run_python_script(check_script)
             if rc != 0:
+                if shutdown_password is not None:
+                    shutdown_system(shutdown_password)
                 continue
             rc = run_python_script(split_script)
             if rc != 0:
+                if shutdown_password is not None:
+                    shutdown_system(shutdown_password)
                 continue
             rc = run_python_script(augment_script)
             if rc != 0:
+                if shutdown_password is not None:
+                    shutdown_system(shutdown_password)
                 continue
 
             args = build_training_args()
             run_training_sequence(all_training_jobs, args)
+            if shutdown_password is not None:
+                shutdown_system(shutdown_password)
         elif choice == "18":
             if not streamlit_app.exists():
                 print("File dashboard tidak ditemukan:", streamlit_app)
