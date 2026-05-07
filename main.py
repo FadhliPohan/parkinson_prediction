@@ -1,5 +1,5 @@
-import os
 import getpass
+import os
 import shutil
 import subprocess
 import sys
@@ -123,6 +123,17 @@ def ask_int(prompt_text: str, default_value: int) -> int:
         return default_value
 
 
+def ask_float(prompt_text: str, default_value: float) -> float:
+    user_input = input("{} [{}]: ".format(prompt_text, default_value)).strip()
+    if not user_input:
+        return default_value
+    try:
+        return float(user_input)
+    except ValueError:
+        print("Input tidak valid. Gunakan default:", default_value)
+        return default_value
+
+
 def ask_yes_no(prompt_text: str, default_yes: bool) -> bool:
     default_label = "Y/n" if default_yes else "y/N"
     user_input = input("{} [{}]: ".format(prompt_text, default_label)).strip().lower()
@@ -134,6 +145,55 @@ def ask_yes_no(prompt_text: str, default_yes: bool) -> bool:
         return False
     print("Input tidak valid. Gunakan default.")
     return default_yes
+
+
+def ask_choice(prompt_text: str, options: List[Tuple[str, str]], default_key: str) -> str:
+    option_map = dict(options)
+    print(prompt_text)
+    for key, label in options:
+        default_marker = " (default)" if key == default_key else ""
+        print("- {}. {}{}".format(key, label, default_marker))
+    user_input = input("Pilih opsi [{}]: ".format(default_key)).strip().lower()
+    if not user_input:
+        return default_key
+    if user_input in option_map:
+        return user_input
+    print("Pilihan tidak valid. Gunakan default:", default_key)
+    return default_key
+
+
+def ask_augmentation_profile() -> str:
+    selected_key = ask_choice(
+        "\nPilih mode augmentasi eksperimen:",
+        [
+            ("1", "Tanpa augmentasi"),
+            ("2", "Augmentasi kustom"),
+            ("3", "Jalankan keduanya untuk komparasi"),
+        ],
+        "3",
+    )
+    return {
+        "1": "without_augment",
+        "2": "mycostum_augment",
+        "3": "all",
+    }[selected_key]
+
+
+def ask_feature_extractor_mode() -> str:
+    selected_key = ask_choice(
+        "\nPilih feature extractor:",
+        [
+            ("1", "HOG"),
+            ("2", "GHOG"),
+            ("3", "Jalankan HOG dan GHOG"),
+        ],
+        "3",
+    )
+    return {
+        "1": "hog",
+        "2": "ghog",
+        "3": "all",
+    }[selected_key]
 
 
 def validate_sudo_password(password: str) -> bool:
@@ -192,11 +252,13 @@ def shutdown_system(password: str) -> int:
     return result.returncode
 
 
-def build_training_args() -> List[str]:
-    print("\nKonfigurasi training (tekan Enter untuk pakai default).")
+def build_deep_training_args() -> List[str]:
+    print("\nKonfigurasi training deep learning (tekan Enter untuk pakai default).")
     epochs = ask_int("Epoch stage-1", 8)
     fine_tune_epochs = ask_int("Epoch fine-tuning", 2)
     batch_size = ask_int("Batch size", 16)
+    augmentation_profile = ask_augmentation_profile()
+    augmentation_copies = ask_int("Jumlah copy augmentasi statis per gambar train", 1)
     max_per_class = ask_int("Max data per kelas per split (0=tanpa batas)", 0)
     train_batch_limit = ask_int("Limit batch train per epoch (0=tanpa batas)", 0)
     validation_batch_limit = ask_int("Limit batch validation (0=tanpa batas)", 0)
@@ -218,6 +280,10 @@ def build_training_args() -> List[str]:
         str(fine_tune_epochs),
         "--batch-size",
         str(batch_size),
+        "--augmentation-profile",
+        augmentation_profile,
+        "--augmentation-copies",
+        str(max(1, augmentation_copies)),
         "--num-parallel-calls",
         str(max(1, num_parallel_calls)),
         "--prefetch-buffer",
@@ -246,13 +312,118 @@ def build_training_args() -> List[str]:
     return args
 
 
+def build_yolo_training_args() -> List[str]:
+    print("\nKonfigurasi training YOLOv8 (tekan Enter untuk pakai default).")
+    epochs = ask_int("Epoch stage-1", 8)
+    fine_tune_epochs = ask_int("Tambahan epoch fine-tuning", 2)
+    batch_size = ask_int("Batch size", 16)
+    max_per_class = ask_int("Max data per kelas per split (0=tanpa batas)", 0)
+    train_batch_limit = ask_int("Limit batch train per epoch (0=tanpa batas)", 0)
+    validation_batch_limit = ask_int("Limit batch validation (0=tanpa batas)", 0)
+    test_batch_limit = ask_int("Limit batch testing (0=tanpa batas)", 0)
+    num_parallel_calls = ask_int("Jumlah worker dataloader", 2)
+    gpu_memory_limit_mb = ask_int("Batas memori GPU MB (0=abaikan)", 0)
+    max_cpu_usage_percent = ask_int("Target maksimum penggunaan CPU (%)", 70)
+    cpu_thread_limit = ask_int("Batas thread CPU absolut (0=otomatis)", 0)
+    allow_cpu_fallback = ask_yes_no("Jika GPU penuh/tidak ada, fallback ke CPU?", True)
+    mixed_precision = ask_yes_no("Aktifkan mixed precision (hemat memori GPU)?", True)
+    yolo_size_choice = ask_choice(
+        "\nPilih ukuran backbone YOLOv8:",
+        [
+            ("1", "YOLOv8n"),
+            ("2", "YOLOv8s"),
+            ("3", "YOLOv8m"),
+            ("4", "YOLOv8l"),
+            ("5", "YOLOv8x"),
+        ],
+        "1",
+    )
+    yolo_size = {"1": "n", "2": "s", "3": "m", "4": "l", "5": "x"}[yolo_size_choice]
+
+    safe_cpu_percent = min(100, max(10, max_cpu_usage_percent))
+    args = [
+        "--epochs",
+        str(epochs),
+        "--fine-tune-epochs",
+        str(fine_tune_epochs),
+        "--batch-size",
+        str(batch_size),
+        "--num-parallel-calls",
+        str(max(1, num_parallel_calls)),
+        "--max-cpu-usage-percent",
+        str(safe_cpu_percent),
+        "--yolo-size",
+        yolo_size,
+    ]
+    if max_per_class > 0:
+        args.extend(["--max-per-class", str(max_per_class)])
+    if train_batch_limit > 0:
+        args.extend(["--train-batch-limit", str(train_batch_limit)])
+    if validation_batch_limit > 0:
+        args.extend(["--validation-batch-limit", str(validation_batch_limit)])
+    if test_batch_limit > 0:
+        args.extend(["--test-batch-limit", str(test_batch_limit)])
+    if gpu_memory_limit_mb > 0:
+        args.extend(["--gpu-memory-limit-mb", str(gpu_memory_limit_mb)])
+    if cpu_thread_limit > 0:
+        args.extend(["--cpu-thread-limit", str(cpu_thread_limit)])
+    if not allow_cpu_fallback:
+        args.append("--disable-cpu-fallback")
+    if mixed_precision:
+        args.append("--mixed-precision")
+    return args
+
+
+def build_feature_training_args() -> List[str]:
+    print("\nKonfigurasi training HOG/GHOG + Classical ML (tekan Enter untuk pakai default).")
+    image_size = ask_int("Ukuran gambar untuk ekstraksi fitur", 224)
+    feature_extractor = ask_feature_extractor_mode()
+    augmentation_profile = ask_augmentation_profile()
+    augmentation_copies = ask_int("Jumlah copy augmentasi statis per gambar train", 1)
+    max_per_class = ask_int("Max data per kelas per split (0=tanpa batas)", 0)
+    hog_orientations = ask_int("Jumlah orientation bins HOG", 9)
+    hog_pixels_per_cell = ask_int("Pixels per cell HOG", 16)
+    hog_cells_per_block = ask_int("Cells per block HOG", 2)
+    max_cpu_usage_percent = ask_int("Target maksimum penggunaan CPU (%)", 70)
+    cpu_thread_limit = ask_int("Batas thread CPU absolut (0=otomatis)", 0)
+
+    safe_cpu_percent = min(100, max(10, max_cpu_usage_percent))
+    args = [
+        "--image-size",
+        str(image_size),
+        "--feature-extractor",
+        feature_extractor,
+        "--augmentation-profile",
+        augmentation_profile,
+        "--augmentation-copies",
+        str(max(1, augmentation_copies)),
+        "--hog-orientations",
+        str(max(1, hog_orientations)),
+        "--hog-pixels-per-cell",
+        str(max(1, hog_pixels_per_cell)),
+        "--hog-cells-per-block",
+        str(max(1, hog_cells_per_block)),
+        "--max-cpu-usage-percent",
+        str(safe_cpu_percent),
+    ]
+    if max_per_class > 0:
+        args.extend(["--max-per-class", str(max_per_class)])
+    if cpu_thread_limit > 0:
+        args.extend(["--cpu-thread-limit", str(cpu_thread_limit)])
+    return args
+
+
 def find_existing_model_run(model_name: str) -> Optional[Path]:
     model_root = PROJECT_ROOT / "trained_models" / model_name
     if not model_root.exists() or not model_root.is_dir():
         return None
 
     def has_model_artifact(run_dir: Path) -> bool:
-        return any(run_dir.glob("*.keras")) or any(run_dir.glob("*.pt"))
+        return (
+            any(run_dir.glob("*.keras"))
+            or any(run_dir.glob("*.pt"))
+            or any(run_dir.glob("*.joblib"))
+        )
 
     latest_run_file = model_root / "latest_run.txt"
     if latest_run_file.exists():
@@ -286,6 +457,15 @@ def run_training_script(script_path: Path, model_name: str, args: List[str]) -> 
     return run_python_script(script_path, args)
 
 
+def run_feature_training_script(
+    script_path: Path,
+    display_name: str,
+    args: List[str],
+) -> int:
+    print("\nMenyiapkan eksperimen {} ...".format(display_name))
+    return run_python_script(script_path, args)
+
+
 def run_training_sequence(
     training_jobs: List[Tuple[str, str, Path]],
     args: List[str],
@@ -298,14 +478,26 @@ def run_training_sequence(
     return True
 
 
+def run_feature_training_sequence(
+    training_jobs: List[Tuple[str, Path]],
+    args: List[str],
+) -> bool:
+    for display_name, script_path in training_jobs:
+        rc = run_feature_training_script(script_path, display_name, args)
+        if rc != 0:
+            print("Training {} gagal/dibatalkan, sequence dihentikan.".format(display_name))
+            return False
+    return True
+
+
 def print_menu() -> None:
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 72)
     print("Pipeline Klasifikasi Parkinson")
-    print("=" * 60)
+    print("=" * 72)
     print("1. Instalasi dependency + virtual environment")
     print("2. Check distribusi dataset")
     print("3. Split data (train/testing/validation)")
-    print("4. Kebijakan augmentasi training (train only, on-the-fly)")
+    print("4. Ringkasan profile augmentasi eksperimen")
     print("5. Training MobileNetV2")
     print("6. Training ResNet50")
     print("7. Training VGG19")
@@ -317,9 +509,15 @@ def print_menu() -> None:
     print("13. Training SwinTransformer")
     print("14. Training DeiT")
     print("15. Training YOLOv8")
-    print("16. Training semua model (CNN + Transformer + YOLOv8)")
-    print("17. Jalankan pipeline penuh (2 -> 4 -> 16)")
-    print("18. Jalankan Dashboard Streamlit")
+    print("16. Training semua model deep learning komparasi (CNN + Transformer)")
+    print("17. Training SVM + HOG/GHOG")
+    print("18. Training KNN + HOG/GHOG")
+    print("19. Training Random Forest + HOG/GHOG")
+    print("20. Training MLP + HOG/GHOG")
+    print("21. Training semua model HOG/GHOG + Classical ML")
+    print("22. Training semua eksperimen komparasi (deep learning + HOG/GHOG)")
+    print("23. Jalankan pipeline penuh (2 -> 4 -> 22)")
+    print("24. Jalankan Dashboard Streamlit")
     print("0. Keluar")
 
 
@@ -338,9 +536,13 @@ def main() -> None:
     swintransformer_script = PROJECT_ROOT / "model" / "swintransformer.py"
     deit_script = PROJECT_ROOT / "model" / "deit.py"
     yolov8_script = PROJECT_ROOT / "model" / "yolov8.py"
+    svm_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "svm_hog_ghog.py"
+    knn_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "knn_hog_ghog.py"
+    rf_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "rf_hog_ghog.py"
+    mlp_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "mlp_hog_ghog.py"
     streamlit_app = PROJECT_ROOT / "web" / "app.py"
 
-    single_training_jobs = {
+    single_deep_training_jobs = {
         "5": ("MobileNetV2", "mobilenetv2", mobilenet_script),
         "6": ("ResNet50", "resnet50", resnet50_script),
         "7": ("VGG19", "vgg19", vgg19_script),
@@ -351,9 +553,8 @@ def main() -> None:
         "12": ("ViT", "vit", vit_script),
         "13": ("SwinTransformer", "swintransformer", swintransformer_script),
         "14": ("DeiT", "deit", deit_script),
-        "15": ("YOLOv8", "yolov8", yolov8_script),
     }
-    all_training_jobs = [
+    deep_training_jobs = [
         ("MobileNetV2", "mobilenetv2", mobilenet_script),
         ("ResNet50", "resnet50", resnet50_script),
         ("VGG19", "vgg19", vgg19_script),
@@ -364,7 +565,18 @@ def main() -> None:
         ("ViT", "vit", vit_script),
         ("SwinTransformer", "swintransformer", swintransformer_script),
         ("DeiT", "deit", deit_script),
-        ("YOLOv8", "yolov8", yolov8_script),
+    ]
+    feature_training_jobs = {
+        "17": ("SVM + HOG/GHOG", svm_hog_ghog_script),
+        "18": ("KNN + HOG/GHOG", knn_hog_ghog_script),
+        "19": ("Random Forest + HOG/GHOG", rf_hog_ghog_script),
+        "20": ("MLP + HOG/GHOG", mlp_hog_ghog_script),
+    }
+    all_feature_training_jobs = [
+        ("SVM + HOG/GHOG", svm_hog_ghog_script),
+        ("KNN + HOG/GHOG", knn_hog_ghog_script),
+        ("Random Forest + HOG/GHOG", rf_hog_ghog_script),
+        ("MLP + HOG/GHOG", mlp_hog_ghog_script),
     ]
 
     while True:
@@ -379,14 +591,29 @@ def main() -> None:
             run_python_script(split_script)
         elif choice == "4":
             run_python_script(augment_script)
-        elif choice in single_training_jobs:
-            args = build_training_args()
-            _, model_name, script_path = single_training_jobs[choice]
+        elif choice in single_deep_training_jobs:
+            args = build_deep_training_args()
+            _, model_name, script_path = single_deep_training_jobs[choice]
             run_training_script(script_path, model_name, args)
+        elif choice == "15":
+            args = build_yolo_training_args()
+            run_training_script(yolov8_script, "yolov8", args)
         elif choice == "16":
-            args = build_training_args()
-            run_training_sequence(all_training_jobs, args)
-        elif choice == "17":
+            args = build_deep_training_args()
+            run_training_sequence(deep_training_jobs, args)
+        elif choice in feature_training_jobs:
+            args = build_feature_training_args()
+            display_name, script_path = feature_training_jobs[choice]
+            run_feature_training_script(script_path, display_name, args)
+        elif choice == "21":
+            args = build_feature_training_args()
+            run_feature_training_sequence(all_feature_training_jobs, args)
+        elif choice == "22":
+            deep_args = build_deep_training_args()
+            feature_args = build_feature_training_args()
+            if run_training_sequence(deep_training_jobs, deep_args):
+                run_feature_training_sequence(all_feature_training_jobs, feature_args)
+        elif choice == "23":
             shutdown_password = ask_auto_shutdown_password()
             rc = run_python_script(check_script)
             if rc != 0:
@@ -404,11 +631,13 @@ def main() -> None:
                     shutdown_system(shutdown_password)
                 continue
 
-            args = build_training_args()
-            run_training_sequence(all_training_jobs, args)
+            deep_args = build_deep_training_args()
+            feature_args = build_feature_training_args()
+            if run_training_sequence(deep_training_jobs, deep_args):
+                run_feature_training_sequence(all_feature_training_jobs, feature_args)
             if shutdown_password is not None:
                 shutdown_system(shutdown_password)
-        elif choice == "18":
+        elif choice == "24":
             if not streamlit_app.exists():
                 print("File dashboard tidak ditemukan:", streamlit_app)
                 continue

@@ -16,9 +16,9 @@ from common import build_feature_arg_parser, run_feature_training_pipeline
 
 
 def main() -> None:
-    parser = build_feature_arg_parser("Training classifier Random Forest dengan fitur HOG/GHOG untuk klasifikasi Parkinson.")
+    parser = build_feature_arg_parser("Training classifier MLP dengan fitur HOG/GHOG untuk klasifikasi Parkinson.")
     args = parser.parse_args()
-    run_feature_training_pipeline(classifier_name="random_forest", args=args)
+    run_feature_training_pipeline(classifier_name="mlp", args=args)
 
 
 if __name__ == "__main__":

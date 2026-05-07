@@ -25,6 +25,13 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 from ultralytics import YOLO
 
+from experiment_utils import (
+    build_run_name,
+    update_latest_run_pointer,
+    write_experiment_summary,
+    write_run_metadata,
+)
+
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
@@ -550,7 +557,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     report_root.mkdir(parents=True, exist_ok=True)
     models_root.mkdir(parents=True, exist_ok=True)
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = build_run_name(model_name="yolov8", augmentation_tag="tanpa_augmentasi")
     run_report_dir = report_root / run_id
     run_model_dir = models_root / run_id
     run_report_dir.mkdir(parents=True, exist_ok=True)
@@ -704,7 +711,14 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     )
 
     metrics_summary = {
+        "run_name": run_id,
+        "model_name": "yolov8",
         "device_used": "cpu" if final_compute_device == "cpu" else "gpu",
+        "augmentation_profile": "without_augment",
+        "augmentation_display_name": "Tanpa augmentasi",
+        "augmentation_enabled": False,
+        "augmentation_copies": 0,
+        "primary_split": "testing",
         "accuracy": float(test_accuracy),
         "f1_score": float(test_f1),
         "roc_auc": float(test_roc_auc) if not np.isnan(test_roc_auc) else float("nan"),
@@ -754,6 +768,42 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     with open(str(run_model_dir / "class_names.json"), "w", encoding="utf-8") as fp:
         json.dump(class_names, fp, indent=2)
 
+    metadata = {
+        "run_name": run_id,
+        "model_name": "yolov8",
+        "model_family": "deep_learning",
+        "model_category": "yolov8_classifier",
+        "classifier_name": "yolov8",
+        "feature_extractor": None,
+        "augmentation_profile": "without_augment",
+        "augmentation_display_name": "Tanpa augmentasi",
+        "augmentation_enabled": False,
+        "augmentation_copies": 0,
+        "dataset_dir": str(dataset_dir),
+        "image_size": int(args.image_size),
+        "class_names": class_names,
+        "split_counts": {
+            "train": split_counts["train"],
+            "validation": split_counts["val"],
+            "testing": split_counts["test"],
+        },
+        "training_config": dict(vars(args)),
+        "artifact_paths": {
+            "report_dir": str(run_report_dir),
+            "model_dir": str(run_model_dir),
+            "best_model": str(best_model_path),
+            "final_model": str(final_model_path),
+        },
+        "pipeline_steps": [
+            "Baca split train/validation/testing dari dataset/split.",
+            "Materialisasi dataset view khusus YOLOv8.",
+            "Training classifier YOLOv8.",
+            "Evaluasi testing tanpa augmentasi eksperimen eksternal.",
+        ],
+    }
+    write_run_metadata(run_report_dir, run_model_dir, metadata)
+    write_experiment_summary(run_report_dir, metadata, metrics_summary)
+
     run_summary_lines = [
         "Model: yolov8",
         "Run ID: {}".format(run_id),
@@ -775,10 +825,8 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     with open(str(run_report_dir / "summary.txt"), "w", encoding="utf-8") as fp:
         fp.write("\n".join(run_summary_lines))
 
-    with open(str(report_root / "latest_run.txt"), "w", encoding="utf-8") as fp:
-        fp.write(run_id)
-    with open(str(models_root / "latest_run.txt"), "w", encoding="utf-8") as fp:
-        fp.write(run_id)
+    update_latest_run_pointer(report_root, run_id)
+    update_latest_run_pointer(models_root, run_id)
 
     print("\n=== Ringkasan Evaluasi YOLOv8 ===")
     print("Device   : {}".format("CPU" if final_compute_device == "cpu" else "GPU"))
