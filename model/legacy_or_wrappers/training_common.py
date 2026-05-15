@@ -627,13 +627,19 @@ def run_training_pipeline(
     print("Sample validation dipakai :", effective_validation_samples, "dari", len(val_labels))
     print("Sample test dipakai       :", effective_test_samples, "dari", len(test_labels))
 
-    train_augmenter, augmentation_policy = load_train_augmentation_bundle()
+    use_train_augmentation = not bool(getattr(args, "disable_augmentation", False))
+    train_augmenter = None
+    augmentation_policy: List[str] = []
     print("\n=== Augmentasi Train On-the-Fly ===")
-    if augmentation_policy:
-        for description in augmentation_policy:
-            print("- {}".format(description))
+    if use_train_augmentation:
+        train_augmenter, augmentation_policy = load_train_augmentation_bundle()
+        if augmentation_policy:
+            for description in augmentation_policy:
+                print("- {}".format(description))
+        else:
+            print("- Augmentasi train aktif dari src/datasets/transforms.py")
     else:
-        print("- Augmentasi train aktif dari src/datasets/transforms.py")
+        print("- Dinonaktifkan (menggunakan data train asli tanpa augmentasi).")
 
     input_shape = (args.image_size, args.image_size, 3)
     train_ds = make_dataset(
@@ -648,7 +654,7 @@ def run_training_pipeline(
         num_parallel_calls=args.num_parallel_calls,
         prefetch_buffer=args.prefetch_buffer,
         batch_limit=train_batch_limit,
-        apply_train_augmentation=True,
+        apply_train_augmentation=use_train_augmentation,
         train_augmenter=train_augmenter,
     )
     val_ds = make_dataset(
@@ -1099,5 +1105,10 @@ def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
         "--no-pretrained",
         action="store_true",
         help="Gunakan bobot acak (tanpa pretrained ImageNet).",
+    )
+    parser.add_argument(
+        "--disable-augmentation",
+        action="store_true",
+        help="Nonaktifkan augmentasi on-the-fly pada split train.",
     )
     return parser

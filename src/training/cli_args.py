@@ -9,6 +9,7 @@ COMMON_BOOL_FLAGS = {
     "disable_cpu_fallback",
     "mixed_precision",
     "no_pretrained",
+    "disable_augmentation",
 }
 
 

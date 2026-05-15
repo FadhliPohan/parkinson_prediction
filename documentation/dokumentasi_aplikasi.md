@@ -7,7 +7,7 @@ Fitur utama saat ini:
 1. Dataset dinamis via registry/config.
 2. Model dinamis via registry/config.
 3. Method training dinamis via registry/config.
-4. Orkestrasi training via CLI (`train.py`) dan menu terminal (`main.py`).
+4. Orkestrasi training via CLI (`training/train.py`) dan menu terminal (`main.py`).
 5. Report terstandar untuk dashboard Streamlit.
 
 ## 2. Komponen Utama
@@ -23,7 +23,7 @@ Fitur utama saat ini:
    - reporting schema/reader (`src/reporting/*`)
    - inference loader/predictor (`src/inference/*`)
 3. Entry points:
-   - `train.py` (CLI)
+   - `training/train.py` (CLI)
    - `main.py` (menu terminal)
    - `web/app.py` (dashboard)
 
@@ -37,22 +37,22 @@ python3 main.py
 ### B. CLI Training Langsung
 Contoh satu model:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models mobilenetv2 --method baseline
+python3 training/train.py --dataset parkinson_merder --models mobilenetv2 --method baseline --preprocessing-mode augment
 ```
 
 Contoh semua model + satu method:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models all --method transfer_learning
+python3 training/train.py --dataset parkinson_mixing --models all --method transfer_learning --preprocessing-mode no_augment
 ```
 
 Contoh semua model + semua method:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models all --all-methods
+python3 training/train.py --dataset parkinson_multiclass --models all --all-methods --preprocessing-mode both
 ```
 
 Contoh pipeline penuh:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models all --all-methods --check-first --split-first --augment-info
+python3 training/train.py --dataset parkinson_multiclass --models all --all-methods --preprocessing-mode both --check-first --split-first --augment-info
 ```
 
 ### C. Dashboard Streamlit
@@ -88,8 +88,8 @@ Isi utama:
 1. Tambahkan dataset baru ke `configs/datasets.yaml`.
 2. Jalankan validasi dan split:
 ```bash
-python3 1.check_dataset.py --dataset <dataset_id>
-python3 2.split_data_testing.py --dataset <dataset_id>
+python3 training/1.check_dataset.py --dataset <dataset_id>
+python3 training/2.split_data_testing.py --dataset <dataset_id>
 ```
 
 ## 6. Menambah Model
@@ -100,10 +100,12 @@ python3 2.split_data_testing.py --dataset <dataset_id>
 ## 7. Menambah Method Training
 1. Tambahkan entry method di `configs/training_methods.yaml`.
 2. Isi `arg_overrides` sesuai strategi.
-3. Method otomatis tersedia di `main.py` dan `train.py`.
+3. Method otomatis tersedia di `main.py` dan `training/train.py`.
 
 ## 8. Catatan
 1. Prioritas utama training saat ini tetap dari terminal/CLI.
 2. Trigger training dari Streamlit masih ditunda (pending) sesuai keputusan proyek.
 3. Untuk multi-class, pipeline sudah disesuaikan agar stabil (metric training tidak lagi memaksa AUC multi-label pada sparse label).
 4. Kebijakan augmentasi kini dipusatkan di `src/datasets/transforms.py` agar tidak duplikatif.
+5. Pilihan dataset sudah dinamis: `parkinson_merder`, `parkinson_mixing`, atau `parkinson_multiclass` (gabungan).
+6. Pilihan preprocessing train sudah dinamis: `augment`, `no_augment`, atau `both`.

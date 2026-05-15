@@ -13,6 +13,23 @@ from src.utils.runtime import build_runtime_env, get_runtime_python, get_venv_py
 
 
 REQUIREMENTS_FILE = PROJECT_ROOT / "requirements.txt"
+TRAINING_DIR = PROJECT_ROOT / "training"
+
+
+def _resolve_script(script_name: str) -> Path:
+    candidates = [
+        TRAINING_DIR / script_name,
+        PROJECT_ROOT / script_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        "Script tidak ditemukan: {}. Sudah cek: {}".format(
+            script_name,
+            ", ".join(str(item) for item in candidates),
+        )
+    )
 
 
 def run_command(command: List[str], cwd: Optional[Path] = None) -> int:
@@ -98,6 +115,16 @@ def ask_optional_int(prompt: str) -> Optional[int]:
         return None
 
 
+def ask_preprocessing_mode() -> str:
+    options = [
+        "augment (gunakan augmentasi on-the-fly)",
+        "no_augment (tanpa augmentasi)",
+        "both (jalankan keduanya)",
+    ]
+    selected = ask_choice("Pilih mode preprocessing", options, default_index=0)
+    return selected.split(" ", 1)[0].strip()
+
+
 def build_train_command(
     dataset_id: str,
     models: str,
@@ -106,8 +133,11 @@ def build_train_command(
     check_first: bool,
     split_first: bool,
     augment_info: bool,
+    preprocessing_mode: str,
 ) -> List[str]:
-    command = [str(get_runtime_python()), str(PROJECT_ROOT / "train.py"), "--dataset", dataset_id, "--models", models]
+    train_script = _resolve_script("train.py")
+    command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
+    command.extend(["--preprocessing-mode", preprocessing_mode])
 
     if method_id:
         command.extend(["--method", method_id])
@@ -141,19 +171,22 @@ def build_train_command(
 
 
 def run_check_dataset(dataset_id: str) -> int:
-    command = [str(get_runtime_python()), str(PROJECT_ROOT / "1.check_dataset.py"), "--dataset", dataset_id]
+    script = _resolve_script("1.check_dataset.py")
+    command = [str(get_runtime_python()), str(script), "--dataset", dataset_id]
     return run_command(command)
 
 
 def run_split_dataset(dataset_id: str) -> int:
-    command = [str(get_runtime_python()), str(PROJECT_ROOT / "2.split_data_testing.py"), "--dataset", dataset_id]
+    script = _resolve_script("2.split_data_testing.py")
+    command = [str(get_runtime_python()), str(script), "--dataset", dataset_id]
     return run_command(command)
 
 
 def run_augment_info(dataset_split_dir: str) -> int:
+    script = _resolve_script("3.augmentasi.py")
     command = [
         str(get_runtime_python()),
-        str(PROJECT_ROOT / "3.augmentasi.py"),
+        str(script),
         "--dataset-dir",
         str(dataset_split_dir),
     ]
@@ -222,6 +255,7 @@ def main() -> None:
                 check_first=False,
                 split_first=False,
                 augment_info=False,
+                preprocessing_mode=ask_preprocessing_mode(),
             )
             run_command(command)
         elif choice == "6":
@@ -234,6 +268,7 @@ def main() -> None:
                 check_first=False,
                 split_first=False,
                 augment_info=False,
+                preprocessing_mode=ask_preprocessing_mode(),
             )
             run_command(command)
         elif choice == "7":
@@ -245,6 +280,7 @@ def main() -> None:
                 check_first=False,
                 split_first=False,
                 augment_info=False,
+                preprocessing_mode=ask_preprocessing_mode(),
             )
             run_command(command)
         elif choice == "8":
@@ -266,6 +302,7 @@ def main() -> None:
                 check_first=True,
                 split_first=True,
                 augment_info=True,
+                preprocessing_mode=ask_preprocessing_mode(),
             )
             run_command(command)
         elif choice == "9":

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.registry import DatasetRegistry
 from src.datasets.splitter import split_dataset
@@ -12,6 +17,40 @@ from src.models.registry import ModelRegistry
 from src.training.strategies import TrainingMethodRegistry, build_training_params
 from src.training.trainer import pick_failed_models, run_training_jobs
 from src.utils.paths import REPORT_ROOT, TRAINED_MODELS_ROOT
+
+
+def _resolve_preprocessing_plan(mode: str) -> List[Dict[str, object]]:
+    normalized = str(mode).strip().lower()
+    if normalized == "augment":
+        return [
+            {
+                "id": "aug_on",
+                "label": "augmentasi_on_the_fly",
+                "disable_augmentation": False,
+            }
+        ]
+    if normalized == "no_augment":
+        return [
+            {
+                "id": "aug_off",
+                "label": "tanpa_augmentasi",
+                "disable_augmentation": True,
+            }
+        ]
+    if normalized == "both":
+        return [
+            {
+                "id": "aug_off",
+                "label": "tanpa_augmentasi",
+                "disable_augmentation": True,
+            },
+            {
+                "id": "aug_on",
+                "label": "augmentasi_on_the_fly",
+                "disable_augmentation": False,
+            },
+        ]
+    raise ValueError("preprocessing_mode tidak valid: {}".format(mode))
 
 
 def _parse_models_arg(models_arg: str, registry: ModelRegistry) -> List[str]:
@@ -103,6 +142,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--method", type=str, default=None, help="ID training method")
     parser.add_argument("--all-methods", action="store_true", help="Jalankan semua method yang terdaftar")
     parser.add_argument("--models", type=str, default="all", help="List model dipisah koma, atau 'all'")
+    parser.add_argument(
+        "--preprocessing-mode",
+        type=str,
+        default="augment",
+        choices=["augment", "no_augment", "both"],
+        help="Mode preprocessing train: augment, no_augment, atau both.",
+    )
 
     parser.add_argument("--check-first", action="store_true", help="Jalankan validasi dataset sebelum training")
     parser.add_argument("--split-first", action="store_true", help="Jalankan proses split dataset sebelum training")
@@ -162,6 +208,7 @@ def main() -> None:
     model_cfgs = [model_registry.get(model_id) for model_id in model_ids if model_registry.get(model_id).enabled]
 
     method_ids = method_registry.list_method_ids() if args.all_methods else [args.method or method_registry.default_method]
+    preprocessing_plan = _resolve_preprocessing_plan(args.preprocessing_mode)
 
     user_overrides = _collect_user_overrides(args)
 
@@ -199,32 +246,48 @@ def main() -> None:
     print("Dataset :", dataset_cfg.dataset_id)
     print("Models  :", ", ".join([m.model_id for m in model_cfgs]))
     print("Methods :", ", ".join(method_ids))
+    print("Preproc :", ", ".join([str(item["label"]) for item in preprocessing_plan]))
 
     overall_failed: List[str] = []
 
     for method_id in method_ids:
-        method_cfg = method_registry.get(method_id)
-        training_params = build_training_params(method=method_cfg, user_overrides=user_overrides)
+        for preproc in preprocessing_plan:
+            method_cfg = method_registry.get(method_id)
+            training_params = build_training_params(method=method_cfg, user_overrides=user_overrides)
+            training_params["disable_augmentation"] = bool(preproc["disable_augmentation"])
 
-        print("\n--- Method:", method_id, "---")
-        status_map = run_training_jobs(
-            models=model_cfgs,
-            dataset_cfg=dataset_cfg,
-            method_id=method_id,
-            training_params=training_params,
-            report_root=REPORT_ROOT,
-            models_root=TRAINED_MODELS_ROOT,
-            stop_on_error=args.stop_on_error,
-        )
+            effective_method_id = (
+                str(method_id)
+                if len(preprocessing_plan) == 1
+                else "{}__{}".format(method_id, preproc["id"])
+            )
 
-        failed = pick_failed_models(status_map)
-        if failed:
-            overall_failed.extend([f"{method_id}:{model_id}" for model_id in failed])
-            print("Model gagal:", ", ".join(failed))
-            if args.stop_on_error:
-                break
-        else:
-            print("Semua model sukses untuk method", method_id)
+            print("\n--- Method: {} | Preprocessing: {} ---".format(method_id, preproc["label"]))
+            status_map = run_training_jobs(
+                models=model_cfgs,
+                dataset_cfg=dataset_cfg,
+                method_id=effective_method_id,
+                training_params=training_params,
+                report_root=REPORT_ROOT,
+                models_root=TRAINED_MODELS_ROOT,
+                stop_on_error=args.stop_on_error,
+            )
+
+            failed = pick_failed_models(status_map)
+            if failed:
+                overall_failed.extend([f"{effective_method_id}:{model_id}" for model_id in failed])
+                print("Model gagal:", ", ".join(failed))
+                if args.stop_on_error:
+                    break
+            else:
+                print(
+                    "Semua model sukses untuk method {} dengan preprocessing {}".format(
+                        method_id, preproc["label"]
+                    )
+                )
+
+        if args.stop_on_error and overall_failed:
+            break
 
     if overall_failed:
         print("\nTraining selesai dengan kegagalan:")

@@ -21,7 +21,7 @@
 Arsitektur sekarang menggunakan kombinasi:
 1. `configs/*.yaml` sebagai sumber konfigurasi (dataset, model, method, default training).
 2. `src/*` sebagai lapisan backend modular (datasets, models, training, reporting, inference, utils).
-3. `train.py` sebagai CLI orchestrator dinamis.
+3. `training/train.py` sebagai CLI orchestrator dinamis.
 4. `main.py` sebagai terminal menu dinamis yang memanggil pipeline registry.
 5. `web/app.py` sebagai dashboard visualisasi dan prediksi yang membaca artifact/report.
 
@@ -70,7 +70,11 @@ parkinson_prediction/
 │  └─ <dataset_name>/<model_name>/<run_id>/
 ├─ trained_models/
 │  └─ <dataset_name>/<model_name>/<run_id>/
-├─ train.py                    # CLI dinamis utama
+├─ training/
+│  ├─ train.py                 # CLI dinamis utama
+│  ├─ 1.check_dataset.py
+│  ├─ 2.split_data_testing.py
+│  └─ 3.augmentasi.py
 ├─ main.py                     # menu terminal dinamis
 ├─ web/app.py                  # dashboard
 └─ documentation/
@@ -111,9 +115,13 @@ parkinson_prediction/
    - `tensorflow_trainer.py`
    - `pytorch_trainer.py`
    - `yolo_trainer.py`
+5. Mode preprocessing train tersedia secara dinamis:
+   - `augment`
+   - `no_augment`
+   - `both` (menjalankan dua eksperimen per method/model).
 
 ## 8. Alur Training
-1. `train.py` menerima input dataset, model(s), method(s), dan override parameter.
+1. `training/train.py` menerima input dataset, model(s), method(s), mode preprocessing, dan override parameter.
 2. Opsional langkah awal:
    - check dataset,
    - split dataset,
@@ -171,8 +179,8 @@ parkinson_prediction/
    - `seed`
 3. Jalankan:
 ```bash
-python3 1.check_dataset.py --dataset <dataset_id>
-python3 2.split_data_testing.py --dataset <dataset_id>
+python3 training/1.check_dataset.py --dataset <dataset_id>
+python3 training/2.split_data_testing.py --dataset <dataset_id>
 ```
 
 ## 13. Cara Menambah Model Baru
@@ -190,7 +198,7 @@ python3 2.split_data_testing.py --dataset <dataset_id>
 2. Isi:
    - `description`
    - `arg_overrides` (mis. epoch, mixed precision, no_pretrained, dll).
-3. Method otomatis tersedia di `train.py` dan menu `main.py`.
+3. Method otomatis tersedia di `training/train.py` dan menu `main.py`.
 
 ## 15. Cara Menjalankan Training via Terminal
 ### Opsi A: Menu Dinamis
@@ -201,22 +209,22 @@ python3 main.py
 ### Opsi B: CLI Dinamis Langsung
 Contoh satu model:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models mobilenetv2 --method baseline
+python3 training/train.py --dataset parkinson_merder --models mobilenetv2 --method baseline --preprocessing-mode augment
 ```
 
 Contoh semua model + satu method:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models all --method transfer_learning
+python3 training/train.py --dataset parkinson_mixing --models all --method transfer_learning --preprocessing-mode no_augment
 ```
 
 Contoh semua model + semua method:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models all --all-methods
+python3 training/train.py --dataset parkinson_multiclass --models all --all-methods --preprocessing-mode both
 ```
 
 Contoh pipeline penuh:
 ```bash
-python3 train.py --dataset parkinson_multiclass --models all --all-methods --check-first --split-first --augment-info
+python3 training/train.py --dataset parkinson_multiclass --models all --all-methods --preprocessing-mode both --check-first --split-first --augment-info
 ```
 
 ## 16. Cara Menjalankan Dashboard

@@ -193,3 +193,59 @@ Menyamakan struktur folder/file agar lebih dekat ke struktur rekomendasi final d
 ### Next step
 1. Menjalankan training penuh lintas semua model/method pada struktur final.
 2. Menambahkan model baru langsung ke registry jika dibutuhkan.
+
+## 2026-05-15  (Asia/Jakarta) - Sesi 5
+
+### Tujuan sesi
+Menyelaraskan pipeline agar benar-benar dinamis sesuai kebutuhan user:
+- pilihan dataset `merder` / `mixing` / `keduanya`,
+- pilihan preprocessing `augment` / `tanpa augment` / `keduanya`,
+- tetap kompatibel dengan menu terminal dan CLI.
+
+### Aktivitas yang sudah dilakukan
+1. Menambah konfigurasi dataset dinamis di `configs/datasets.yaml`:
+   - `parkinson_merder`
+   - `parkinson_mixing`
+   - `parkinson_multiclass` (gabungan).
+2. Menambah mode preprocessing dinamis di `training/train.py`:
+   - argumen baru `--preprocessing-mode {augment,no_augment,both}`.
+3. Menyesuaikan loop orchestrator training agar saat mode `both` menjalankan dua eksperimen otomatis (`aug_off` dan `aug_on`) untuk method/model yang sama.
+4. Menambah dukungan flag `--disable-augmentation` pada arg builder (`src/training/cli_args.py`) dan meneruskannya ke worker model.
+5. Mengubah worker TensorFlow (`model/legacy_or_wrappers/training_common.py`) agar augmentasi benar-benar bisa ON/OFF.
+6. Mengubah worker YOLO (`model/legacy_or_wrappers/yolov8.py`) agar menerima opsi nonaktif augmentasi.
+7. Menyesuaikan `main.py`:
+   - prompt mode preprocessing di menu training,
+   - otomatis kirim `--preprocessing-mode` ke `training/train.py`.
+8. Memperbarui dokumentasi:
+   - `documentation/dokumentasi_aplikasi.md`
+   - `documentation/architecture.md`
+   - `documentation/arsitectur.md` (sinkron/mirror).
+
+### Validasi yang dilakukan
+1. `python3 -m py_compile` pada file perubahan utama -> sukses.
+2. Validasi dataset check:
+   - `parkinson_merder` -> 2 kelas,
+   - `parkinson_mixing` -> 6 kelas,
+   - `parkinson_multiclass` -> 8 kelas.
+3. Validasi split:
+   - `parkinson_merder` -> sukses,
+   - `parkinson_mixing` -> sukses.
+4. Smoke test training:
+   - `training/train.py --dataset parkinson_merder --preprocessing-mode both ...`
+   - berhasil menjalankan dua run (`baseline__aug_off` dan `baseline__aug_on`) tanpa error.
+5. Validasi menu `main.py`:
+   - pilihan dataset tampil dinamis (merder/mixing/multiclass),
+   - pilihan preprocessing tampil dinamis (augment/no_augment/both),
+   - command training terbentuk sesuai mode terpilih.
+
+### Temuan penting
+1. Environment `.venv` saat ini belum memasang stack YOLO/PyTorch (`torch` belum ada), sehingga runtime YOLO belum diuji penuh pada sesi ini.
+2. Jalur TensorFlow dan alur report/artifact sudah tervalidasi untuk mode preprocessing ON/OFF/BOTH.
+
+### Keputusan
+1. Kontrol dataset dan preprocessing dipusatkan pada config + orchestrator CLI agar tidak hard-code per script.
+2. Untuk pembandingan eksperimen, run metadata membedakan mode preprocessing via suffix method (`__aug_off` / `__aug_on`).
+
+### Next step
+1. Jika ingin menguji YOLO end-to-end, lakukan instalasi dependency penuh dari `requirements.txt` di `.venv`.
+2. Lanjutkan full experiment semua model + semua method + preprocessing mode sesuai resource komputasi.

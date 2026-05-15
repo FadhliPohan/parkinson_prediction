@@ -418,6 +418,7 @@ def train_yolov8_once(
 
     total_epochs = max(1, int(args.epochs) + max(0, int(args.fine_tune_epochs)))
     mixed_precision_enabled = bool(args.mixed_precision and device != "cpu")
+    use_train_augmentation = not bool(getattr(args, "disable_augmentation", False))
 
     print("\n=== Training YOLOv8 ===")
     print("Model source             :", model_source)
@@ -426,6 +427,7 @@ def train_yolov8_once(
     print("Image size               :", args.image_size)
     print("Learning rate            :", args.learning_rate)
     print("Mixed precision          :", mixed_precision_enabled)
+    print("Augmentasi train         :", "aktif" if use_train_augmentation else "nonaktif")
     print("Device aktif             :", "GPU" if device != "cpu" else "CPU")
     if args.gpu_memory_limit_mb:
         print("Catatan: --gpu-memory-limit-mb belum didukung langsung oleh YOLOv8/PyTorch.")
@@ -450,6 +452,7 @@ def train_yolov8_once(
         device=device,
         pretrained=not args.no_pretrained,
         amp=mixed_precision_enabled,
+        augment=use_train_augmentation,
         verbose=True,
     )
     return Path(train_result.save_dir).resolve()
@@ -993,6 +996,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--no-pretrained",
         action="store_true",
         help="Gunakan arsitektur YAML tanpa bobot pretrained.",
+    )
+    parser.add_argument(
+        "--disable-augmentation",
+        action="store_true",
+        help="Nonaktifkan augmentasi train bawaan YOLOv8.",
     )
     parser.add_argument(
         "--yolo-size",
