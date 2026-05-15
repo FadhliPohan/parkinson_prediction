@@ -1,0 +1,31 @@
+defaults:
+  default_method: transfer_learning
+
+methods:
+  baseline:
+    description: "Baseline dari bobot acak tanpa fine-tuning."
+    arg_overrides:
+      no_pretrained: true
+      fine_tune_epochs: 0
+      mixed_precision: false
+
+  transfer_learning:
+    description: "Transfer learning standar + fine-tuning bertahap."
+    arg_overrides:
+      no_pretrained: false
+      fine_tune_epochs: 2
+      mixed_precision: false
+
+  transfer_learning_mixed_precision:
+    description: "Transfer learning + mixed precision untuk optimasi GPU."
+    arg_overrides:
+      no_pretrained: false
+      fine_tune_epochs: 2
+      mixed_precision: true
+
+  full_fine_tuning:
+    description: "Transfer learning dengan fine-tuning lebih panjang."
+    arg_overrides:
+      no_pretrained: false
+      fine_tune_epochs: 6
+      mixed_precision: true

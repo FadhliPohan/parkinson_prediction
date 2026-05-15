@@ -1,0 +1,19 @@
+defaults:
+  default_dataset: parkinson_multiclass
+
+datasets:
+  parkinson_multiclass:
+    description: "Dataset multiclass berbasis folder gambar (scan kelas rekursif leaf folder)."
+    original_dir: "dataset/original"
+    split_dir: "dataset/split/parkinson_multiclass"
+    class_mode: "recursive_leaf"
+    seed: 42
+    valid_extensions: [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"]
+    split:
+      train: 0.70
+      testing: 0.15
+      validation: 0.15
+    resize:
+      train: [224, 224]
+      testing: null
+      validation: null

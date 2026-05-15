@@ -1,650 +1,275 @@
-import getpass
-import os
-import shutil
+from __future__ import annotations
+
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
+
+from src.datasets.registry import DatasetRegistry
+from src.models.registry import ModelRegistry
+from src.training.strategies import TrainingMethodRegistry
+from src.utils.paths import PROJECT_ROOT
+from src.utils.runtime import build_runtime_env, get_runtime_python, get_venv_python_path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-VENV_DIR = PROJECT_ROOT / ".venv"
 REQUIREMENTS_FILE = PROJECT_ROOT / "requirements.txt"
 
 
-def build_runtime_env() -> dict:
-    env = os.environ.copy()
-    lib_dirs: List[str] = []
-
-    nvidia_root_candidates = sorted(
-        (VENV_DIR / "lib").glob("python*/site-packages/nvidia")
-    )
-    for nvidia_root in nvidia_root_candidates:
-        for lib_dir in sorted(nvidia_root.glob("*/lib")):
-            if lib_dir.is_dir():
-                lib_dirs.append(str(lib_dir))
-
-    if lib_dirs:
-        current_ld_path = env.get("LD_LIBRARY_PATH", "")
-        prefix = ":".join(lib_dirs)
-        env["LD_LIBRARY_PATH"] = "{}:{}".format(prefix, current_ld_path) if current_ld_path else prefix
-
-    return env
-
-
-def get_venv_python_path() -> Path:
-    if sys.platform.startswith("win"):
-        return VENV_DIR / "Scripts" / "python.exe"
-    return VENV_DIR / "bin" / "python"
-
-
-def get_runtime_python() -> Path:
-    venv_python = get_venv_python_path()
-    if venv_python.exists():
-        return venv_python
-    return Path(sys.executable)
-
-
-def run_command(command: List[str], failure_prefix: str) -> int:
+def run_command(command: List[str], cwd: Optional[Path] = None) -> int:
     print("\nMenjalankan:", " ".join(command))
-    result = subprocess.run(command, cwd=str(PROJECT_ROOT), env=build_runtime_env())
+    result = subprocess.run(command, cwd=str(cwd or PROJECT_ROOT), env=build_runtime_env())
     if result.returncode != 0:
-        print("{} {}".format(failure_prefix, result.returncode))
-    return result.returncode
+        print("Perintah gagal dengan exit code:", result.returncode)
+    return int(result.returncode)
 
 
 def install_environment() -> int:
     venv_python = get_venv_python_path()
     if not venv_python.exists():
         print("\nVirtual environment belum ada, membuat .venv ...")
-        create_rc = run_command(
-            [sys.executable, "-m", "venv", str(VENV_DIR)],
-            "Gagal membuat virtual environment. Exit code:",
-        )
-        if create_rc != 0:
-            return create_rc
-    else:
-        print("\nVirtual environment sudah ada:", VENV_DIR)
+        rc = run_command([sys.executable, "-m", "venv", str(PROJECT_ROOT / ".venv")])
+        if rc != 0:
+            return rc
 
-    venv_python = get_venv_python_path()
     if not REQUIREMENTS_FILE.exists():
         print("requirements.txt tidak ditemukan:", REQUIREMENTS_FILE)
         return 1
 
-    upgrade_rc = run_command(
-        [str(venv_python), "-m", "pip", "install", "--upgrade", "pip"],
-        "Upgrade pip gagal. Exit code:",
-    )
-    if upgrade_rc != 0:
-        return upgrade_rc
+    venv_python = get_venv_python_path()
+    rc = run_command([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"])
+    if rc != 0:
+        return rc
 
     if REQUIREMENTS_FILE.stat().st_size == 0:
         print("requirements.txt kosong. Tidak ada dependency yang diinstall.")
         return 0
 
-    install_rc = run_command(
-        [str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS_FILE)],
-        "Instalasi dependency gagal. Exit code:",
-    )
-    if install_rc == 0:
+    rc = run_command([str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS_FILE)])
+    if rc == 0:
         print("Instalasi selesai.")
-    return install_rc
+    return rc
 
 
-def run_python_script(script_path: Path, extra_args: List[str] = None) -> int:
-    if extra_args is None:
-        extra_args = []
+def ask_choice(prompt: str, options: List[str], default_index: int = 0) -> str:
+    if not options:
+        raise ValueError("Tidak ada opsi")
 
-    command = [str(get_runtime_python()), str(script_path)] + extra_args
-    print("\nMenjalankan:", " ".join(command))
-    result = subprocess.run(command, cwd=str(PROJECT_ROOT), env=build_runtime_env())
-    if result.returncode != 0:
-        print("Perintah gagal dengan exit code:", result.returncode)
-    return result.returncode
+    print()
+    for idx, option in enumerate(options, start=1):
+        default_label = " (default)" if idx - 1 == default_index else ""
+        print(f"{idx}. {option}{default_label}")
 
+    raw = input(f"{prompt} [{default_index + 1}]: ").strip()
+    if not raw:
+        return options[default_index]
 
-def run_streamlit_app(app_path: Path) -> int:
-    command = [str(get_runtime_python()), "-m", "streamlit", "run", str(app_path)]
-    print("\nMenjalankan:", " ".join(command))
-    result = subprocess.run(command, cwd=str(PROJECT_ROOT), env=build_runtime_env())
-    if result.returncode != 0:
-        print("Streamlit gagal dijalankan. Exit code:", result.returncode)
-    return result.returncode
-
-
-def ask_int(prompt_text: str, default_value: int) -> int:
-    user_input = input("{} [{}]: ".format(prompt_text, default_value)).strip()
-    if not user_input:
-        return default_value
     try:
-        return int(user_input)
+        selected = int(raw)
+        if 1 <= selected <= len(options):
+            return options[selected - 1]
     except ValueError:
-        print("Input tidak valid. Gunakan default:", default_value)
-        return default_value
+        pass
+
+    print("Input tidak valid, gunakan default.")
+    return options[default_index]
 
 
-def ask_float(prompt_text: str, default_value: float) -> float:
-    user_input = input("{} [{}]: ".format(prompt_text, default_value)).strip()
-    if not user_input:
-        return default_value
-    try:
-        return float(user_input)
-    except ValueError:
-        print("Input tidak valid. Gunakan default:", default_value)
-        return default_value
-
-
-def ask_yes_no(prompt_text: str, default_yes: bool) -> bool:
+def ask_yes_no(prompt: str, default_yes: bool = False) -> bool:
     default_label = "Y/n" if default_yes else "y/N"
-    user_input = input("{} [{}]: ".format(prompt_text, default_label)).strip().lower()
-    if not user_input:
+    raw = input(f"{prompt} [{default_label}]: ").strip().lower()
+    if not raw:
         return default_yes
-    if user_input in ("y", "yes"):
+    if raw in {"y", "yes"}:
         return True
-    if user_input in ("n", "no"):
+    if raw in {"n", "no"}:
         return False
-    print("Input tidak valid. Gunakan default.")
+    print("Input tidak valid, gunakan default.")
     return default_yes
 
 
-def ask_choice(prompt_text: str, options: List[Tuple[str, str]], default_key: str) -> str:
-    option_map = dict(options)
-    print(prompt_text)
-    for key, label in options:
-        default_marker = " (default)" if key == default_key else ""
-        print("- {}. {}{}".format(key, label, default_marker))
-    user_input = input("Pilih opsi [{}]: ".format(default_key)).strip().lower()
-    if not user_input:
-        return default_key
-    if user_input in option_map:
-        return user_input
-    print("Pilihan tidak valid. Gunakan default:", default_key)
-    return default_key
-
-
-def ask_augmentation_profile() -> str:
-    selected_key = ask_choice(
-        "\nPilih mode augmentasi eksperimen:",
-        [
-            ("1", "Tanpa augmentasi"),
-            ("2", "Augmentasi kustom"),
-            ("3", "Jalankan keduanya untuk komparasi"),
-        ],
-        "3",
-    )
-    return {
-        "1": "without_augment",
-        "2": "mycostum_augment",
-        "3": "all",
-    }[selected_key]
-
-
-def ask_feature_extractor_mode() -> str:
-    selected_key = ask_choice(
-        "\nPilih feature extractor:",
-        [
-            ("1", "HOG"),
-            ("2", "GHOG"),
-            ("3", "Jalankan HOG dan GHOG"),
-        ],
-        "3",
-    )
-    return {
-        "1": "hog",
-        "2": "ghog",
-        "3": "all",
-    }[selected_key]
-
-
-def validate_sudo_password(password: str) -> bool:
-    if os.name != "posix":
-        print("Auto shutdown hanya didukung pada sistem Linux/macOS.")
-        return False
-    if shutil.which("sudo") is None:
-        print("Perintah sudo tidak ditemukan. Auto shutdown tidak bisa diaktifkan.")
-        return False
-
-    result = subprocess.run(
-        ["sudo", "-S", "-k", "-v"],
-        input=password + "\n",
-        text=True,
-        cwd=str(PROJECT_ROOT),
-        env=build_runtime_env(),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if result.returncode != 0:
-        print("Password sudo tidak valid. Auto shutdown dibatalkan.")
-        return False
-    return True
-
-
-def ask_auto_shutdown_password() -> Optional[str]:
-    should_shutdown = ask_yes_no(
-        "Matikan PC otomatis setelah pipeline penuh selesai?",
-        False,
-    )
-    if not should_shutdown:
+def ask_optional_int(prompt: str) -> Optional[int]:
+    raw = input(f"{prompt} [kosong=default]: ").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        print("Input tidak valid, pakai default.")
         return None
 
-    sudo_password = getpass.getpass("Masukkan password sudo: ").strip()
-    if not sudo_password:
-        print("Password kosong. Auto shutdown dibatalkan.")
-        return None
-    if not validate_sudo_password(sudo_password):
-        return None
 
-    print("Auto shutdown aktif. PC akan dimatikan setelah pipeline penuh berakhir.")
-    return sudo_password
+def build_train_command(
+    dataset_id: str,
+    models: str,
+    method_id: Optional[str],
+    all_methods: bool,
+    check_first: bool,
+    split_first: bool,
+    augment_info: bool,
+) -> List[str]:
+    command = [str(get_runtime_python()), str(PROJECT_ROOT / "train.py"), "--dataset", dataset_id, "--models", models]
+
+    if method_id:
+        command.extend(["--method", method_id])
+    if all_methods:
+        command.append("--all-methods")
+    if check_first:
+        command.append("--check-first")
+    if split_first:
+        command.append("--split-first")
+    if augment_info:
+        command.append("--augment-info")
+
+    epochs = ask_optional_int("Override epoch stage-1")
+    batch_size = ask_optional_int("Override batch size")
+    fine_tune_epochs = ask_optional_int("Override fine-tune epochs")
+
+    if epochs is not None:
+        command.extend(["--epochs", str(epochs)])
+    if batch_size is not None:
+        command.extend(["--batch-size", str(batch_size)])
+    if fine_tune_epochs is not None:
+        command.extend(["--fine-tune-epochs", str(fine_tune_epochs)])
+
+    if ask_yes_no("Aktifkan mixed precision?", False):
+        command.append("--mixed-precision")
+
+    if ask_yes_no("Nonaktifkan fallback CPU?", False):
+        command.append("--disable-cpu-fallback")
+
+    return command
 
 
-def shutdown_system(password: str) -> int:
-    print("\nPipeline selesai. Menjalankan shutdown sistem ...")
-    result = subprocess.run(
-        ["sudo", "-S", "-k", "shutdown", "-h", "now"],
-        input=password + "\n",
-        text=True,
-        cwd=str(PROJECT_ROOT),
-        env=build_runtime_env(),
-    )
-    if result.returncode != 0:
-        print("Shutdown otomatis gagal. Exit code:", result.returncode)
-    return result.returncode
+def run_check_dataset(dataset_id: str) -> int:
+    command = [str(get_runtime_python()), str(PROJECT_ROOT / "1.check_dataset.py"), "--dataset", dataset_id]
+    return run_command(command)
 
 
-def build_deep_training_args() -> List[str]:
-    print("\nKonfigurasi training deep learning (tekan Enter untuk pakai default).")
-    epochs = ask_int("Epoch stage-1", 8)
-    fine_tune_epochs = ask_int("Epoch fine-tuning", 2)
-    batch_size = ask_int("Batch size", 16)
-    augmentation_profile = ask_augmentation_profile()
-    augmentation_copies = ask_int("Jumlah copy augmentasi statis per gambar train", 1)
-    max_per_class = ask_int("Max data per kelas per split (0=tanpa batas)", 0)
-    train_batch_limit = ask_int("Limit batch train per epoch (0=tanpa batas)", 0)
-    validation_batch_limit = ask_int("Limit batch validation (0=tanpa batas)", 0)
-    test_batch_limit = ask_int("Limit batch testing (0=tanpa batas)", 0)
-    num_parallel_calls = ask_int("Jumlah worker decode/resize", 2)
-    prefetch_buffer = ask_int("Prefetch buffer", 1)
-    shuffle_buffer_size = ask_int("Shuffle buffer size", 2048)
-    gpu_memory_limit_mb = ask_int("Batas memori GPU MB (0=memory growth)", 0)
-    max_cpu_usage_percent = ask_int("Target maksimum penggunaan CPU (%)", 70)
-    cpu_thread_limit = ask_int("Batas thread CPU absolut (0=otomatis)", 0)
-    allow_cpu_fallback = ask_yes_no("Jika GPU penuh/tidak ada, fallback ke CPU?", True)
-    mixed_precision = ask_yes_no("Aktifkan mixed precision (hemat memori GPU)?", True)
+def run_split_dataset(dataset_id: str) -> int:
+    command = [str(get_runtime_python()), str(PROJECT_ROOT / "2.split_data_testing.py"), "--dataset", dataset_id]
+    return run_command(command)
 
-    safe_cpu_percent = min(100, max(10, max_cpu_usage_percent))
-    args = [
-        "--epochs",
-        str(epochs),
-        "--fine-tune-epochs",
-        str(fine_tune_epochs),
-        "--batch-size",
-        str(batch_size),
-        "--augmentation-profile",
-        augmentation_profile,
-        "--augmentation-copies",
-        str(max(1, augmentation_copies)),
-        "--num-parallel-calls",
-        str(max(1, num_parallel_calls)),
-        "--prefetch-buffer",
-        str(max(1, prefetch_buffer)),
-        "--shuffle-buffer-size",
-        str(max(1, shuffle_buffer_size)),
-        "--max-cpu-usage-percent",
-        str(safe_cpu_percent),
+
+def run_augment_info(dataset_split_dir: str) -> int:
+    command = [
+        str(get_runtime_python()),
+        str(PROJECT_ROOT / "3.augmentasi.py"),
+        "--dataset-dir",
+        str(dataset_split_dir),
     ]
-    if max_per_class > 0:
-        args.extend(["--max-per-class", str(max_per_class)])
-    if train_batch_limit > 0:
-        args.extend(["--train-batch-limit", str(train_batch_limit)])
-    if validation_batch_limit > 0:
-        args.extend(["--validation-batch-limit", str(validation_batch_limit)])
-    if test_batch_limit > 0:
-        args.extend(["--test-batch-limit", str(test_batch_limit)])
-    if gpu_memory_limit_mb > 0:
-        args.extend(["--gpu-memory-limit-mb", str(gpu_memory_limit_mb)])
-    if cpu_thread_limit > 0:
-        args.extend(["--cpu-thread-limit", str(cpu_thread_limit)])
-    if not allow_cpu_fallback:
-        args.append("--disable-cpu-fallback")
-    if mixed_precision:
-        args.append("--mixed-precision")
-    return args
+    return run_command(command)
 
 
-def build_yolo_training_args() -> List[str]:
-    print("\nKonfigurasi training YOLOv8 (tekan Enter untuk pakai default).")
-    epochs = ask_int("Epoch stage-1", 8)
-    fine_tune_epochs = ask_int("Tambahan epoch fine-tuning", 2)
-    batch_size = ask_int("Batch size", 16)
-    max_per_class = ask_int("Max data per kelas per split (0=tanpa batas)", 0)
-    train_batch_limit = ask_int("Limit batch train per epoch (0=tanpa batas)", 0)
-    validation_batch_limit = ask_int("Limit batch validation (0=tanpa batas)", 0)
-    test_batch_limit = ask_int("Limit batch testing (0=tanpa batas)", 0)
-    num_parallel_calls = ask_int("Jumlah worker dataloader", 2)
-    gpu_memory_limit_mb = ask_int("Batas memori GPU MB (0=abaikan)", 0)
-    max_cpu_usage_percent = ask_int("Target maksimum penggunaan CPU (%)", 70)
-    cpu_thread_limit = ask_int("Batas thread CPU absolut (0=otomatis)", 0)
-    allow_cpu_fallback = ask_yes_no("Jika GPU penuh/tidak ada, fallback ke CPU?", True)
-    mixed_precision = ask_yes_no("Aktifkan mixed precision (hemat memori GPU)?", True)
-    yolo_size_choice = ask_choice(
-        "\nPilih ukuran backbone YOLOv8:",
-        [
-            ("1", "YOLOv8n"),
-            ("2", "YOLOv8s"),
-            ("3", "YOLOv8m"),
-            ("4", "YOLOv8l"),
-            ("5", "YOLOv8x"),
-        ],
-        "1",
-    )
-    yolo_size = {"1": "n", "2": "s", "3": "m", "4": "l", "5": "x"}[yolo_size_choice]
-
-    safe_cpu_percent = min(100, max(10, max_cpu_usage_percent))
-    args = [
-        "--epochs",
-        str(epochs),
-        "--fine-tune-epochs",
-        str(fine_tune_epochs),
-        "--batch-size",
-        str(batch_size),
-        "--num-parallel-calls",
-        str(max(1, num_parallel_calls)),
-        "--max-cpu-usage-percent",
-        str(safe_cpu_percent),
-        "--yolo-size",
-        yolo_size,
-    ]
-    if max_per_class > 0:
-        args.extend(["--max-per-class", str(max_per_class)])
-    if train_batch_limit > 0:
-        args.extend(["--train-batch-limit", str(train_batch_limit)])
-    if validation_batch_limit > 0:
-        args.extend(["--validation-batch-limit", str(validation_batch_limit)])
-    if test_batch_limit > 0:
-        args.extend(["--test-batch-limit", str(test_batch_limit)])
-    if gpu_memory_limit_mb > 0:
-        args.extend(["--gpu-memory-limit-mb", str(gpu_memory_limit_mb)])
-    if cpu_thread_limit > 0:
-        args.extend(["--cpu-thread-limit", str(cpu_thread_limit)])
-    if not allow_cpu_fallback:
-        args.append("--disable-cpu-fallback")
-    if mixed_precision:
-        args.append("--mixed-precision")
-    return args
-
-
-def build_feature_training_args() -> List[str]:
-    print("\nKonfigurasi training HOG/GHOG + Classical ML (tekan Enter untuk pakai default).")
-    image_size = ask_int("Ukuran gambar untuk ekstraksi fitur", 224)
-    feature_extractor = ask_feature_extractor_mode()
-    augmentation_profile = ask_augmentation_profile()
-    augmentation_copies = ask_int("Jumlah copy augmentasi statis per gambar train", 1)
-    max_per_class = ask_int("Max data per kelas per split (0=tanpa batas)", 0)
-    hog_orientations = ask_int("Jumlah orientation bins HOG", 9)
-    hog_pixels_per_cell = ask_int("Pixels per cell HOG", 16)
-    hog_cells_per_block = ask_int("Cells per block HOG", 2)
-    max_cpu_usage_percent = ask_int("Target maksimum penggunaan CPU (%)", 70)
-    cpu_thread_limit = ask_int("Batas thread CPU absolut (0=otomatis)", 0)
-
-    safe_cpu_percent = min(100, max(10, max_cpu_usage_percent))
-    args = [
-        "--image-size",
-        str(image_size),
-        "--feature-extractor",
-        feature_extractor,
-        "--augmentation-profile",
-        augmentation_profile,
-        "--augmentation-copies",
-        str(max(1, augmentation_copies)),
-        "--hog-orientations",
-        str(max(1, hog_orientations)),
-        "--hog-pixels-per-cell",
-        str(max(1, hog_pixels_per_cell)),
-        "--hog-cells-per-block",
-        str(max(1, hog_cells_per_block)),
-        "--max-cpu-usage-percent",
-        str(safe_cpu_percent),
-    ]
-    if max_per_class > 0:
-        args.extend(["--max-per-class", str(max_per_class)])
-    if cpu_thread_limit > 0:
-        args.extend(["--cpu-thread-limit", str(cpu_thread_limit)])
-    return args
-
-
-def find_existing_model_run(model_name: str) -> Optional[Path]:
-    model_root = PROJECT_ROOT / "trained_models" / model_name
-    if not model_root.exists() or not model_root.is_dir():
-        return None
-
-    def has_model_artifact(run_dir: Path) -> bool:
-        return (
-            any(run_dir.glob("*.keras"))
-            or any(run_dir.glob("*.pt"))
-            or any(run_dir.glob("*.joblib"))
-        )
-
-    latest_run_file = model_root / "latest_run.txt"
-    if latest_run_file.exists():
-        run_id = latest_run_file.read_text(encoding="utf-8").strip()
-        if run_id:
-            run_dir = model_root / run_id
-            if run_dir.exists() and run_dir.is_dir() and has_model_artifact(run_dir):
-                return run_dir
-
-    run_dirs = sorted([path for path in model_root.iterdir() if path.is_dir()], reverse=True)
-    for run_dir in run_dirs:
-        if has_model_artifact(run_dir):
-            return run_dir
-    return None
-
-
-def should_train_model(model_name: str) -> bool:
-    existing_run = find_existing_model_run(model_name)
-    if existing_run is None:
-        return True
-
-    print("\nModel {} sudah pernah di-training.".format(model_name))
-    print("Lokasi model sebelumnya:", existing_run)
-    return ask_yes_no("Lanjutkan training ulang {}?".format(model_name), False)
-
-
-def run_training_script(script_path: Path, model_name: str, args: List[str]) -> Optional[int]:
-    if not should_train_model(model_name):
-        print("Training {} dilewati.".format(model_name))
-        return None
-    return run_python_script(script_path, args)
-
-
-def run_feature_training_script(
-    script_path: Path,
-    display_name: str,
-    args: List[str],
-) -> int:
-    print("\nMenyiapkan eksperimen {} ...".format(display_name))
-    return run_python_script(script_path, args)
-
-
-def run_training_sequence(
-    training_jobs: List[Tuple[str, str, Path]],
-    args: List[str],
-) -> bool:
-    for display_name, model_name, script_path in training_jobs:
-        rc = run_training_script(script_path, model_name, args)
-        if rc is not None and rc != 0:
-            print("Training {} gagal/dibatalkan, sequence dihentikan.".format(display_name))
-            return False
-    return True
-
-
-def run_feature_training_sequence(
-    training_jobs: List[Tuple[str, Path]],
-    args: List[str],
-) -> bool:
-    for display_name, script_path in training_jobs:
-        rc = run_feature_training_script(script_path, display_name, args)
-        if rc != 0:
-            print("Training {} gagal/dibatalkan, sequence dihentikan.".format(display_name))
-            return False
-    return True
+def run_streamlit_dashboard() -> int:
+    command = [str(get_runtime_python()), "-m", "streamlit", "run", str(PROJECT_ROOT / "web" / "app.py")]
+    return run_command(command)
 
 
 def print_menu() -> None:
-    print("\n" + "=" * 72)
-    print("Pipeline Klasifikasi Parkinson")
-    print("=" * 72)
+    print("\n" + "=" * 68)
+    print("Pipeline Klasifikasi Parkinson (Dynamic Registry Mode)")
+    print("=" * 68)
     print("1. Instalasi dependency + virtual environment")
     print("2. Check distribusi dataset")
-    print("3. Split data (train/testing/validation)")
-    print("4. Ringkasan profile augmentasi eksperimen")
-    print("5. Training MobileNetV2")
-    print("6. Training ResNet50")
-    print("7. Training VGG19")
-    print("8. Training ResNet152")
-    print("9. Training Inception (GoogLeNet style)")
-    print("10. Training EfficientNet")
-    print("11. Training DenseNet121")
-    print("12. Training ViT (Vision Transformer)")
-    print("13. Training SwinTransformer")
-    print("14. Training DeiT")
-    print("15. Training YOLOv8")
-    print("16. Training semua model deep learning komparasi (CNN + Transformer)")
-    print("17. Training SVM + HOG/GHOG")
-    print("18. Training KNN + HOG/GHOG")
-    print("19. Training Random Forest + HOG/GHOG")
-    print("20. Training MLP + HOG/GHOG")
-    print("21. Training semua model HOG/GHOG + Classical ML")
-    print("22. Training semua eksperimen komparasi (deep learning + HOG/GHOG)")
-    print("23. Jalankan pipeline penuh (2 -> 4 -> 22)")
-    print("24. Jalankan Dashboard Streamlit")
+    print("3. Split dataset")
+    print("4. Info kebijakan augmentasi train")
+    print("5. Training satu model")
+    print("6. Training semua model (satu method)")
+    print("7. Training semua model + semua method")
+    print("8. Pipeline penuh (check -> split -> augment -> train all models)")
+    print("9. Jalankan dashboard Streamlit")
     print("0. Keluar")
 
 
 def main() -> None:
-    check_script = PROJECT_ROOT / "1.check_dataset.py"
-    split_script = PROJECT_ROOT / "2.split_data_testing.py"
-    augment_script = PROJECT_ROOT / "3.augmentasi.py"
-    mobilenet_script = PROJECT_ROOT / "model" / "mobilenetv2.py"
-    resnet50_script = PROJECT_ROOT / "model" / "resnet50.py"
-    vgg19_script = PROJECT_ROOT / "model" / "vgg19.py"
-    resnet152_script = PROJECT_ROOT / "model" / "resnet152.py"
-    inception_googlenet_script = PROJECT_ROOT / "model" / "inception_googlenet.py"
-    efficientnet_script = PROJECT_ROOT / "model" / "efficientnet.py"
-    densenet121_script = PROJECT_ROOT / "model" / "densenet121.py"
-    vit_script = PROJECT_ROOT / "model" / "vit.py"
-    swintransformer_script = PROJECT_ROOT / "model" / "swintransformer.py"
-    deit_script = PROJECT_ROOT / "model" / "deit.py"
-    yolov8_script = PROJECT_ROOT / "model" / "yolov8.py"
-    svm_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "svm_hog_ghog.py"
-    knn_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "knn_hog_ghog.py"
-    rf_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "rf_hog_ghog.py"
-    mlp_hog_ghog_script = PROJECT_ROOT / "model" / "hog_ghog" / "mlp_hog_ghog.py"
-    streamlit_app = PROJECT_ROOT / "web" / "app.py"
-
-    single_deep_training_jobs = {
-        "5": ("MobileNetV2", "mobilenetv2", mobilenet_script),
-        "6": ("ResNet50", "resnet50", resnet50_script),
-        "7": ("VGG19", "vgg19", vgg19_script),
-        "8": ("ResNet152", "resnet152", resnet152_script),
-        "9": ("Inception (GoogLeNet style)", "inception_googlenet", inception_googlenet_script),
-        "10": ("EfficientNet", "efficientnet", efficientnet_script),
-        "11": ("DenseNet121", "densenet121", densenet121_script),
-        "12": ("ViT", "vit", vit_script),
-        "13": ("SwinTransformer", "swintransformer", swintransformer_script),
-        "14": ("DeiT", "deit", deit_script),
-    }
-    deep_training_jobs = [
-        ("MobileNetV2", "mobilenetv2", mobilenet_script),
-        ("ResNet50", "resnet50", resnet50_script),
-        ("VGG19", "vgg19", vgg19_script),
-        ("ResNet152", "resnet152", resnet152_script),
-        ("Inception (GoogLeNet style)", "inception_googlenet", inception_googlenet_script),
-        ("EfficientNet", "efficientnet", efficientnet_script),
-        ("DenseNet121", "densenet121", densenet121_script),
-        ("ViT", "vit", vit_script),
-        ("SwinTransformer", "swintransformer", swintransformer_script),
-        ("DeiT", "deit", deit_script),
-    ]
-    feature_training_jobs = {
-        "17": ("SVM + HOG/GHOG", svm_hog_ghog_script),
-        "18": ("KNN + HOG/GHOG", knn_hog_ghog_script),
-        "19": ("Random Forest + HOG/GHOG", rf_hog_ghog_script),
-        "20": ("MLP + HOG/GHOG", mlp_hog_ghog_script),
-    }
-    all_feature_training_jobs = [
-        ("SVM + HOG/GHOG", svm_hog_ghog_script),
-        ("KNN + HOG/GHOG", knn_hog_ghog_script),
-        ("Random Forest + HOG/GHOG", rf_hog_ghog_script),
-        ("MLP + HOG/GHOG", mlp_hog_ghog_script),
-    ]
-
     while True:
+        dataset_registry = DatasetRegistry()
+        model_registry = ModelRegistry()
+        method_registry = TrainingMethodRegistry()
+
+        dataset_ids = dataset_registry.list_dataset_ids()
+        model_ids = model_registry.list_model_ids(enabled_only=True)
+        method_ids = method_registry.list_method_ids()
+
         print_menu()
         choice = input("Pilih aksi: ").strip()
 
-        if choice == "1":
-            install_environment()
-        elif choice == "2":
-            run_python_script(check_script)
-        elif choice == "3":
-            run_python_script(split_script)
-        elif choice == "4":
-            run_python_script(augment_script)
-        elif choice in single_deep_training_jobs:
-            args = build_deep_training_args()
-            _, model_name, script_path = single_deep_training_jobs[choice]
-            run_training_script(script_path, model_name, args)
-        elif choice == "15":
-            args = build_yolo_training_args()
-            run_training_script(yolov8_script, "yolov8", args)
-        elif choice == "16":
-            args = build_deep_training_args()
-            run_training_sequence(deep_training_jobs, args)
-        elif choice in feature_training_jobs:
-            args = build_feature_training_args()
-            display_name, script_path = feature_training_jobs[choice]
-            run_feature_training_script(script_path, display_name, args)
-        elif choice == "21":
-            args = build_feature_training_args()
-            run_feature_training_sequence(all_feature_training_jobs, args)
-        elif choice == "22":
-            deep_args = build_deep_training_args()
-            feature_args = build_feature_training_args()
-            if run_training_sequence(deep_training_jobs, deep_args):
-                run_feature_training_sequence(all_feature_training_jobs, feature_args)
-        elif choice == "23":
-            shutdown_password = ask_auto_shutdown_password()
-            rc = run_python_script(check_script)
-            if rc != 0:
-                if shutdown_password is not None:
-                    shutdown_system(shutdown_password)
-                continue
-            rc = run_python_script(split_script)
-            if rc != 0:
-                if shutdown_password is not None:
-                    shutdown_system(shutdown_password)
-                continue
-            rc = run_python_script(augment_script)
-            if rc != 0:
-                if shutdown_password is not None:
-                    shutdown_system(shutdown_password)
-                continue
-
-            deep_args = build_deep_training_args()
-            feature_args = build_feature_training_args()
-            if run_training_sequence(deep_training_jobs, deep_args):
-                run_feature_training_sequence(all_feature_training_jobs, feature_args)
-            if shutdown_password is not None:
-                shutdown_system(shutdown_password)
-        elif choice == "24":
-            if not streamlit_app.exists():
-                print("File dashboard tidak ditemukan:", streamlit_app)
-                continue
-            run_streamlit_app(streamlit_app)
-        elif choice == "0":
+        if choice == "0":
             print("Selesai.")
             break
+
+        if choice == "1":
+            install_environment()
+            continue
+
+        selected_dataset = ask_choice("Pilih dataset", dataset_ids, default_index=dataset_ids.index(dataset_registry.default_dataset))
+        dataset_cfg = dataset_registry.get(selected_dataset)
+
+        if choice == "2":
+            run_check_dataset(selected_dataset)
+        elif choice == "3":
+            run_split_dataset(selected_dataset)
+        elif choice == "4":
+            run_augment_info(str(dataset_cfg.split_path))
+        elif choice == "5":
+            selected_model = ask_choice("Pilih model", model_ids)
+            selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
+            command = build_train_command(
+                dataset_id=selected_dataset,
+                models=selected_model,
+                method_id=selected_method,
+                all_methods=False,
+                check_first=False,
+                split_first=False,
+                augment_info=False,
+            )
+            run_command(command)
+        elif choice == "6":
+            selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
+            command = build_train_command(
+                dataset_id=selected_dataset,
+                models="all",
+                method_id=selected_method,
+                all_methods=False,
+                check_first=False,
+                split_first=False,
+                augment_info=False,
+            )
+            run_command(command)
+        elif choice == "7":
+            command = build_train_command(
+                dataset_id=selected_dataset,
+                models="all",
+                method_id=None,
+                all_methods=True,
+                check_first=False,
+                split_first=False,
+                augment_info=False,
+            )
+            run_command(command)
+        elif choice == "8":
+            use_all_methods = ask_yes_no("Gunakan semua method training?", True)
+            if use_all_methods:
+                method_id = None
+            else:
+                method_id = ask_choice(
+                    "Pilih method",
+                    method_ids,
+                    default_index=method_ids.index(method_registry.default_method),
+                )
+
+            command = build_train_command(
+                dataset_id=selected_dataset,
+                models="all",
+                method_id=method_id,
+                all_methods=use_all_methods,
+                check_first=True,
+                split_first=True,
+                augment_info=True,
+            )
+            run_command(command)
+        elif choice == "9":
+            run_streamlit_dashboard()
         else:
             print("Pilihan tidak dikenali. Coba lagi.")
 

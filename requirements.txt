@@ -8,3 +8,4 @@ scikit-image==0.25.2
 pillow==12.2.0
 streamlit==1.56.0
 ultralytics==8.3.161
+PyYAML==6.0.2

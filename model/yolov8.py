@@ -3,6 +3,7 @@ import json
 import os
 import random
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -25,11 +26,15 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 from ultralytics import YOLO
 
-from experiment_utils import (
-    build_run_name,
-    update_latest_run_pointer,
-    write_experiment_summary,
-    write_run_metadata,
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.reporting.report_writer import (
+    build_artifact_dirs,
+    generate_run_id,
+    write_latest_run_marker,
+    write_run_manifest,
 )
 
 
@@ -536,6 +541,7 @@ def load_training_history(train_save_dir: Path) -> pd.DataFrame:
 
 
 def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
+    run_started_at = datetime.now().astimezone().isoformat()
     set_global_seed(args.seed)
     configure_cpu_runtime(
         max_cpu_usage_percent=args.max_cpu_usage_percent,
@@ -544,24 +550,24 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     compute_device = configure_compute_device(disable_cpu_fallback=args.disable_cpu_fallback)
     final_compute_device = compute_device
 
-    project_root = Path(__file__).resolve().parents[1]
-    dataset_dir = (project_root / args.dataset_dir).resolve()
+    dataset_dir = (PROJECT_ROOT / args.dataset_dir).resolve()
     ensure_split_structure(dataset_dir)
 
     class_names = get_class_names(dataset_dir)
     num_classes = len(class_names)
     is_binary = num_classes == 2
 
-    report_root = (project_root / "report" / "yolov8").resolve()
-    models_root = (project_root / "trained_models" / "yolov8").resolve()
-    report_root.mkdir(parents=True, exist_ok=True)
-    models_root.mkdir(parents=True, exist_ok=True)
-
-    run_id = build_run_name(model_name="yolov8", augmentation_tag="tanpa_augmentasi")
-    run_report_dir = report_root / run_id
-    run_model_dir = models_root / run_id
-    run_report_dir.mkdir(parents=True, exist_ok=True)
-    run_model_dir.mkdir(parents=True, exist_ok=True)
+    report_root = (PROJECT_ROOT / args.report_root).resolve()
+    models_root = (PROJECT_ROOT / args.models_root).resolve()
+    dataset_name = str(args.dataset_name).strip() if str(args.dataset_name).strip() else "default_dataset"
+    run_id = generate_run_id()
+    report_model_root, models_model_root, run_report_dir, run_model_dir = build_artifact_dirs(
+        report_root=report_root,
+        models_root=models_root,
+        dataset_name=dataset_name,
+        model_name="yolov8",
+        run_id=run_id,
+    )
 
     train_limit = pick_split_limit(args.max_per_class, args.max_train_per_class)
     val_limit = pick_split_limit(args.max_per_class, args.max_validation_per_class)
@@ -711,14 +717,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     )
 
     metrics_summary = {
-        "run_name": run_id,
-        "model_name": "yolov8",
         "device_used": "cpu" if final_compute_device == "cpu" else "gpu",
-        "augmentation_profile": "without_augment",
-        "augmentation_display_name": "Tanpa augmentasi",
-        "augmentation_enabled": False,
-        "augmentation_copies": 0,
-        "primary_split": "testing",
         "accuracy": float(test_accuracy),
         "f1_score": float(test_f1),
         "roc_auc": float(test_roc_auc) if not np.isnan(test_roc_auc) else float("nan"),
@@ -768,49 +767,17 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     with open(str(run_model_dir / "class_names.json"), "w", encoding="utf-8") as fp:
         json.dump(class_names, fp, indent=2)
 
-    metadata = {
-        "run_name": run_id,
-        "model_name": "yolov8",
-        "model_family": "deep_learning",
-        "model_category": "yolov8_classifier",
-        "classifier_name": "yolov8",
-        "feature_extractor": None,
-        "augmentation_profile": "without_augment",
-        "augmentation_display_name": "Tanpa augmentasi",
-        "augmentation_enabled": False,
-        "augmentation_copies": 0,
-        "dataset_dir": str(dataset_dir),
-        "image_size": int(args.image_size),
-        "class_names": class_names,
-        "split_counts": {
-            "train": split_counts["train"],
-            "validation": split_counts["val"],
-            "testing": split_counts["test"],
-        },
-        "training_config": dict(vars(args)),
-        "artifact_paths": {
-            "report_dir": str(run_report_dir),
-            "model_dir": str(run_model_dir),
-            "best_model": str(best_model_path),
-            "final_model": str(final_model_path),
-        },
-        "pipeline_steps": [
-            "Baca split train/validation/testing dari dataset/split.",
-            "Materialisasi dataset view khusus YOLOv8.",
-            "Training classifier YOLOv8.",
-            "Evaluasi testing tanpa augmentasi eksperimen eksternal.",
-        ],
-    }
-    write_run_metadata(run_report_dir, run_model_dir, metadata)
-    write_experiment_summary(run_report_dir, metadata, metrics_summary)
+    run_finished_at = datetime.now().astimezone().isoformat()
 
     run_summary_lines = [
         "Model: yolov8",
+        "Dataset Name: {}".format(dataset_name),
         "Run ID: {}".format(run_id),
         "Dataset: {}".format(dataset_dir),
         "Dataset view: {}".format(dataset_view_dir),
         "Report dir: {}".format(run_report_dir),
         "Model dir: {}".format(run_model_dir),
+        "Training Method: {}".format(args.training_method),
         "Best model: {}".format(best_model_path),
         "Final model: {}".format(final_model_path),
         "Device: {}".format("CPU" if final_compute_device == "cpu" else "GPU"),
@@ -825,8 +792,43 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     with open(str(run_report_dir / "summary.txt"), "w", encoding="utf-8") as fp:
         fp.write("\n".join(run_summary_lines))
 
-    update_latest_run_pointer(report_root, run_id)
-    update_latest_run_pointer(models_root, run_id)
+    run_manifest = {
+        "schema_version": "2.0.0",
+        "run_id": run_id,
+        "run_started_at": run_started_at,
+        "run_finished_at": run_finished_at,
+        "dataset": {
+            "dataset_name": dataset_name,
+            "dataset_dir": str(dataset_dir),
+            "class_names": class_names,
+            "class_count": int(num_classes),
+            "split_counts": {
+                "train": split_counts["train"],
+                "testing": split_counts["test"],
+                "validation": split_counts["val"],
+            },
+        },
+        "model": {
+            "model_name": "yolov8",
+            "framework": "yolo",
+            "variant": "yolov8{}-cls".format(args.yolo_size),
+        },
+        "training": {
+            "method": args.training_method,
+            "parameters": vars(args),
+            "device_used": "cpu" if final_compute_device == "cpu" else "gpu",
+        },
+        "artifacts": {
+            "report_dir": str(run_report_dir),
+            "model_dir": str(run_model_dir),
+            "best_model_path": str(best_model_path),
+            "final_model_path": str(final_model_path),
+        },
+    }
+    write_run_manifest(run_report_dir=run_report_dir, manifest=run_manifest)
+
+    write_latest_run_marker(report_model_root, run_id)
+    write_latest_run_marker(models_model_root, run_id)
 
     print("\n=== Ringkasan Evaluasi YOLOv8 ===")
     print("Device   : {}".format("CPU" if final_compute_device == "cpu" else "GPU"))
@@ -850,6 +852,25 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Training klasifikasi Parkinson dengan YOLOv8.")
     parser.add_argument("--dataset-dir", type=str, default="dataset/split", help="Folder dataset hasil split.")
+    parser.add_argument("--dataset-name", type=str, default="default_dataset", help="ID dataset (untuk path artifact).")
+    parser.add_argument(
+        "--training-method",
+        type=str,
+        default="transfer_learning",
+        help="ID metode training (untuk metadata run).",
+    )
+    parser.add_argument(
+        "--report-root",
+        type=str,
+        default="report",
+        help="Root folder report.",
+    )
+    parser.add_argument(
+        "--models-root",
+        type=str,
+        default="trained_models",
+        help="Root folder model artifact.",
+    )
     parser.add_argument("--image-size", type=int, default=224, help="Ukuran gambar input model.")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size saat training.")
     parser.add_argument("--epochs", type=int, default=8, help="Jumlah epoch stage 1.")

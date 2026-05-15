@@ -1,90 +1,93 @@
-from collections import defaultdict
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List
 
 import matplotlib.pyplot as plt
 
-
-DATASET_DIR = Path("dataset/original")
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-
-
-def count_images_per_class(dataset_dir: Path) -> Dict[str, int]:
-    class_counts: Dict[str, int] = defaultdict(int)
-
-    if not dataset_dir.exists():
-        raise FileNotFoundError(f"Folder dataset tidak ditemukan: {dataset_dir.resolve()}")
-
-    for class_dir in dataset_dir.iterdir():
-        if not class_dir.is_dir():
-            continue
-
-        image_count = sum(
-            1
-            for file in class_dir.iterdir()
-            if file.is_file() and file.suffix.lower() in IMAGE_EXTENSIONS
-        )
-        class_counts[class_dir.name] = image_count
-
-    if not class_counts:
-        raise ValueError(f"Tidak ada folder kelas di dalam: {dataset_dir.resolve()}")
-
-    return dict(class_counts)
+from src.datasets.registry import DatasetRegistry
+from src.datasets.validator import discover_class_directories
 
 
-def print_distribution(class_counts: Dict[str, int]) -> None:
-    total_images = sum(class_counts.values())
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Cek distribusi dataset dari registry/config.")
+    parser.add_argument("--dataset", type=str, default=None, help="ID dataset dari configs/datasets.yaml")
+    parser.add_argument("--dataset-dir", type=str, default=None, help="Override folder dataset original")
+    parser.add_argument("--class-mode", type=str, default=None, choices=["direct", "recursive_leaf"])
+    parser.add_argument("--save-plot", type=str, default=None, help="Path output gambar distribusi")
+    return parser
+
+
+def _print_distribution(distribution: Dict[str, int], source: Path) -> None:
+    total_images = sum(distribution.values())
     print("\n=== Distribusi Dataset ===")
-    print(f"Total gambar: {total_images}")
-    print("-" * 40)
+    print("Sumber   :", source)
+    print("Kelas    :", len(distribution))
+    print("Total img:", total_images)
+    print("-" * 80)
+    print("{:<45s} {:>12s} {:>12s}".format("Kelas", "Jumlah", "Persen"))
+    print("-" * 80)
+    for class_name, count in sorted(distribution.items()):
+        pct = (float(count) / float(total_images) * 100.0) if total_images else 0.0
+        print("{:<45s} {:>12d} {:>11.2f}%".format(class_name, count, pct))
+    print("-" * 80)
 
-    for class_name, count in sorted(class_counts.items()):
-        percentage = (count / total_images * 100) if total_images else 0
-        print(f"{class_name:15s}: {count:5d} ({percentage:6.2f}%)")
 
-    print("-" * 40)
+def _plot_distribution(distribution: Dict[str, int], output_path: Path) -> None:
+    class_names = list(distribution.keys())
+    counts = list(distribution.values())
 
-
-def plot_distribution(class_counts: Dict[str, int], save_path: Optional[Path] = None) -> None:
-    class_names = list(class_counts.keys())
-    counts = list(class_counts.values())
-    total_images = sum(counts)
-    percentages = [(c / total_images * 100) if total_images else 0 for c in counts]
-
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(14, 6))
     bars = plt.bar(class_names, counts)
     plt.title("Distribusi Jumlah Data per Kelas")
     plt.xlabel("Kelas")
     plt.ylabel("Jumlah Gambar")
-    plt.grid(axis="y", linestyle="--", alpha=0.35)
+    plt.xticks(rotation=45, ha="right")
+    plt.grid(axis="y", linestyle="--", alpha=0.3)
 
-    for bar, pct in zip(bars, percentages):
-        height = bar.get_height()
-        plt.text(
-            bar.get_x() + bar.get_width() / 2,
-            height,
-            f"{int(height)}\n({pct:.1f}%)",
-            ha="center",
-            va="bottom",
-        )
+    for bar in bars:
+        height = int(bar.get_height())
+        plt.text(bar.get_x() + bar.get_width() / 2, height, str(height), ha="center", va="bottom", fontsize=8)
 
     plt.tight_layout()
-
-    if save_path is not None:
-        plt.savefig(save_path, dpi=200)
-        print(f"Grafik disimpan ke: {save_path.resolve()}")
-
-    backend_name = plt.get_backend().lower()
-    if "agg" in backend_name:
-        plt.close()
-    else:
-        plt.show()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200)
+    plt.close()
+    print("Grafik distribusi disimpan ke:", output_path)
 
 
 def main() -> None:
-    class_counts = count_images_per_class(DATASET_DIR)
-    print_distribution(class_counts)
-    plot_distribution(class_counts, save_path=Path("dataset_distribution.png"))
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    registry = DatasetRegistry()
+    dataset_id = args.dataset or registry.default_dataset
+    dataset_cfg = registry.get(dataset_id)
+
+    dataset_dir = Path(args.dataset_dir).resolve() if args.dataset_dir else dataset_cfg.original_path
+    class_mode = args.class_mode or dataset_cfg.class_mode
+    extensions = dataset_cfg.valid_extensions
+
+    class_entries = discover_class_directories(
+        dataset_root=dataset_dir,
+        class_mode=class_mode,
+        extensions=extensions,
+    )
+    if len(class_entries) < 2:
+        raise ValueError(
+            f"Dataset '{dataset_id}' harus punya minimal 2 kelas valid. "
+            f"Saat ini: {len(class_entries)}"
+        )
+
+    distribution = {entry.class_name: entry.image_count for entry in class_entries}
+    _print_distribution(distribution, dataset_dir)
+
+    if args.save_plot:
+        output_path = Path(args.save_plot).resolve()
+    else:
+        output_path = Path("dataset_distribution_{}.png".format(dataset_id)).resolve()
+    _plot_distribution(distribution, output_path)
 
 
 if __name__ == "__main__":
