@@ -19,7 +19,7 @@ Fitur utama saat ini:
 2. `src/`
    - dataset management (`src/datasets/*`)
    - model registry (`src/models/registry.py`)
-   - training orchestration (`src/training/*`)
+   - training orchestration (`src/training/*`, termasuk runner per framework)
    - reporting schema/reader (`src/reporting/*`)
    - inference loader/predictor (`src/inference/*`)
 3. Entry points:
@@ -106,3 +106,4 @@ python3 2.split_data_testing.py --dataset <dataset_id>
 1. Prioritas utama training saat ini tetap dari terminal/CLI.
 2. Trigger training dari Streamlit masih ditunda (pending) sesuai keputusan proyek.
 3. Untuk multi-class, pipeline sudah disesuaikan agar stabil (metric training tidak lagi memaksa AUC multi-label pada sparse label).
+4. Kebijakan augmentasi kini dipusatkan di `src/datasets/transforms.py` agar tidak duplikatif.

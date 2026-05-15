@@ -13,7 +13,7 @@ except Exception:
 
 from src.utils.paths import PROJECT_ROOT
 
-MODEL_DIR = PROJECT_ROOT / "model"
+MODEL_DIR = PROJECT_ROOT / "model" / "legacy_or_wrappers"
 if str(MODEL_DIR) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(MODEL_DIR))
 

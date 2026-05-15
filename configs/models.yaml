@@ -1,77 +1,77 @@
 models:
   mobilenetv2:
     display_name: "MobileNetV2"
-    script_path: "model/mobilenetv2.py"
+    script_path: "model/legacy_or_wrappers/mobilenetv2.py"
     framework: "tensorflow"
     preprocess_key: "mobilenetv2"
     enabled: true
 
   resnet50:
     display_name: "ResNet50"
-    script_path: "model/resnet50.py"
+    script_path: "model/legacy_or_wrappers/resnet50.py"
     framework: "tensorflow"
     preprocess_key: "resnet50"
     enabled: true
 
   vgg19:
     display_name: "VGG19"
-    script_path: "model/vgg19.py"
+    script_path: "model/legacy_or_wrappers/vgg19.py"
     framework: "tensorflow"
     preprocess_key: "vgg19"
     enabled: true
 
   resnet152:
     display_name: "ResNet152"
-    script_path: "model/resnet152.py"
+    script_path: "model/legacy_or_wrappers/resnet152.py"
     framework: "tensorflow"
     preprocess_key: "resnet152"
     enabled: true
 
   inception_googlenet:
     display_name: "Inception (GoogLeNet style)"
-    script_path: "model/inception_googlenet.py"
+    script_path: "model/legacy_or_wrappers/inception_googlenet.py"
     framework: "tensorflow"
     preprocess_key: "inception_googlenet"
     enabled: true
 
   efficientnet:
     display_name: "EfficientNetB0"
-    script_path: "model/efficientnet.py"
+    script_path: "model/legacy_or_wrappers/efficientnet.py"
     framework: "tensorflow"
     preprocess_key: "efficientnet"
     enabled: true
 
   densenet121:
     display_name: "DenseNet121"
-    script_path: "model/densenet121.py"
+    script_path: "model/legacy_or_wrappers/densenet121.py"
     framework: "tensorflow"
     preprocess_key: "densenet121"
     enabled: true
 
   vit:
     display_name: "Vision Transformer (ViT)"
-    script_path: "model/vit.py"
+    script_path: "model/legacy_or_wrappers/vit.py"
     framework: "tensorflow"
     preprocess_key: "transformer"
     enabled: true
 
   swintransformer:
     display_name: "SwinTransformer"
-    script_path: "model/swintransformer.py"
+    script_path: "model/legacy_or_wrappers/swintransformer.py"
     framework: "tensorflow"
     preprocess_key: "transformer"
     enabled: true
 
   deit:
     display_name: "DeiT"
-    script_path: "model/deit.py"
+    script_path: "model/legacy_or_wrappers/deit.py"
     framework: "tensorflow"
     preprocess_key: "transformer"
     enabled: true
 
   yolov8:
     display_name: "YOLOv8 Classifier"
-    script_path: "model/yolov8.py"
+    script_path: "model/legacy_or_wrappers/yolov8.py"
     framework: "yolo"
     preprocess_key: "yolo"
     enabled: true

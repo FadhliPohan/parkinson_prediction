@@ -7,7 +7,7 @@ def configure_cuda_library_path() -> None:
     if os.environ.get("PARKINSON_CUDA_ENV_READY") == "1":
         return
 
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     lib_dirs = []
     for nvidia_root in sorted((project_root / ".venv" / "lib").glob("python*/site-packages/nvidia")):
         for lib_dir in sorted(nvidia_root.glob("*/lib")):

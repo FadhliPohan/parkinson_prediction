@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
 from src.datasets.registry import DatasetRegistry
 from src.datasets.splitter import split_dataset
+from src.datasets.transforms import print_augmentation_summary
 from src.datasets.validator import discover_class_directories
 from src.models.registry import ModelRegistry
 from src.training.strategies import TrainingMethodRegistry, build_training_params
 from src.training.trainer import pick_failed_models, run_training_jobs
-from src.utils.paths import PROJECT_ROOT, REPORT_ROOT, TRAINED_MODELS_ROOT
-from src.utils.runtime import build_runtime_env, get_runtime_python
+from src.utils.paths import REPORT_ROOT, TRAINED_MODELS_ROOT
 
 
 def _parse_models_arg(models_arg: str, registry: ModelRegistry) -> List[str]:
@@ -47,9 +46,12 @@ def _print_dataset_preview(dataset_id: str, dataset_dir: Path, class_mode: str, 
 
 
 def _run_augment_info(split_dir: Path) -> int:
-    command = [str(get_runtime_python()), str(PROJECT_ROOT / "3.augmentasi.py"), "--dataset-dir", str(split_dir)]
-    result = subprocess.run(command, env=build_runtime_env(), cwd=str(PROJECT_ROOT))
-    return int(result.returncode)
+    try:
+        print_augmentation_summary(split_dir)
+        return 0
+    except Exception as exc:
+        print("Gagal menampilkan augmentasi:", exc)
+        return 1
 
 
 def _collect_user_overrides(args: argparse.Namespace) -> Dict[str, Any]:

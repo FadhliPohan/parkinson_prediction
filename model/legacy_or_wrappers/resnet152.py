@@ -7,7 +7,7 @@ def configure_cuda_library_path() -> None:
     if os.environ.get("PARKINSON_CUDA_ENV_READY") == "1":
         return
 
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     lib_dirs = []
     for nvidia_root in sorted((project_root / ".venv" / "lib").glob("python*/site-packages/nvidia")):
         for lib_dir in sorted(nvidia_root.glob("*/lib")):
@@ -36,13 +36,13 @@ from training_common import build_common_arg_parser, run_training_pipeline
 
 
 def main() -> None:
-    parser = build_common_arg_parser("Training klasifikasi Parkinson dengan ResNet50.")
+    parser = build_common_arg_parser("Training klasifikasi Parkinson dengan ResNet152.")
     args = parser.parse_args()
 
     run_training_pipeline(
-        model_name="resnet50",
-        backbone_builder=tf.keras.applications.ResNet50,
-        preprocess_fn=tf.keras.applications.resnet50.preprocess_input,
+        model_name="resnet152",
+        backbone_builder=tf.keras.applications.ResNet152,
+        preprocess_fn=tf.keras.applications.resnet.preprocess_input,
         args=args,
     )
 

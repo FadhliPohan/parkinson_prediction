@@ -1,49 +1,20 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List
 
 from src.datasets.registry import DatasetConfig
 from src.models.registry import ModelConfig
-from src.utils.paths import PROJECT_ROOT
-from src.utils.runtime import build_runtime_env, get_runtime_python
+from src.training.pytorch_trainer import run_pytorch_training
+from src.training.tensorflow_trainer import run_tensorflow_training
+from src.training.yolo_trainer import run_yolo_training
 
 
-COMMON_BOOL_FLAGS = {
-    "disable_cpu_fallback",
-    "mixed_precision",
-    "no_pretrained",
+FRAMEWORK_RUNNERS = {
+    "tensorflow": run_tensorflow_training,
+    "yolo": run_yolo_training,
+    "pytorch": run_pytorch_training,
 }
-
-
-def _normalized_flag_name(key: str) -> str:
-    return "--" + key.replace("_", "-")
-
-
-def _build_cli_args(params: Dict[str, Any], framework: str) -> List[str]:
-    args: List[str] = []
-    skip_keys = set()
-
-    if framework != "yolo":
-        skip_keys.add("yolo_size")
-
-    for key, value in params.items():
-        if key in skip_keys:
-            continue
-
-        flag = _normalized_flag_name(key)
-        if key in COMMON_BOOL_FLAGS:
-            if bool(value):
-                args.append(flag)
-            continue
-
-        if value is None:
-            continue
-
-        args.extend([flag, str(value)])
-
-    return args
 
 
 def run_model_training(
@@ -54,30 +25,21 @@ def run_model_training(
     report_root: Path,
     models_root: Path,
 ) -> int:
-    script_path = model_cfg.script_abs_path
-    if not script_path.exists():
-        raise FileNotFoundError(f"Script model tidak ditemukan: {script_path}")
+    framework = str(model_cfg.framework).strip().lower()
+    runner = FRAMEWORK_RUNNERS.get(framework)
+    if runner is None:
+        raise ValueError(f"Framework runner belum didukung: {framework} untuk model {model_cfg.model_id}")
 
-    cli_args = _build_cli_args(training_params, framework=model_cfg.framework)
-    cli_args.extend(
-        [
-            "--dataset-dir",
-            str(dataset_cfg.split_path),
-            "--dataset-name",
-            dataset_cfg.dataset_id,
-            "--training-method",
-            method_id,
-            "--report-root",
-            str(report_root),
-            "--models-root",
-            str(models_root),
-        ]
+    return int(
+        runner(
+            model_cfg=model_cfg,
+            dataset_cfg=dataset_cfg,
+            method_id=method_id,
+            training_params=training_params,
+            report_root=report_root,
+            models_root=models_root,
+        )
     )
-
-    command = [str(get_runtime_python()), str(script_path)] + cli_args
-    print("\nMenjalankan:", " ".join(command))
-    result = subprocess.run(command, env=build_runtime_env(), cwd=str(PROJECT_ROOT))
-    return int(result.returncode)
 
 
 def run_training_jobs(

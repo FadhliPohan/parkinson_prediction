@@ -1,5 +1,4 @@
 import argparse
-import importlib.util
 import json
 import os
 import random
@@ -27,10 +26,13 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-AUGMENTATION_SCRIPT_PATH = PROJECT_ROOT / "3.augmentasi.py"
+from src.datasets.transforms import (
+    build_training_augmentation,
+    describe_augmentation_policy,
+)
 
 from src.reporting.report_writer import (
     build_artifact_dirs,
@@ -47,35 +49,11 @@ def set_global_seed(seed: int) -> None:
 
 
 def load_train_augmentation_bundle() -> Tuple[tf.keras.layers.Layer, List[str]]:
-    if not AUGMENTATION_SCRIPT_PATH.exists():
-        raise FileNotFoundError(
-            "File augmentasi training tidak ditemukan: {}".format(AUGMENTATION_SCRIPT_PATH.resolve())
-        )
-
-    spec = importlib.util.spec_from_file_location(
-        "parkinson_training_augmentation",
-        str(AUGMENTATION_SCRIPT_PATH),
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError("Gagal memuat file augmentasi: {}".format(AUGMENTATION_SCRIPT_PATH.resolve()))
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    build_fn = getattr(module, "build_training_augmentation", None)
-    if not callable(build_fn):
-        raise AttributeError(
-            "Fungsi build_training_augmentation() tidak ditemukan di {}".format(
-                AUGMENTATION_SCRIPT_PATH.resolve()
-            )
-        )
-
-    augmenter = build_fn()
+    augmenter = build_training_augmentation()
     if not isinstance(augmenter, tf.keras.layers.Layer):
-        raise TypeError("build_training_augmentation() harus mengembalikan tf.keras.layers.Layer.")
+        raise TypeError("build_training_augmentation() harus mengembalikan tf.keras.layers.Layer")
 
-    describe_fn = getattr(module, "describe_augmentation_policy", None)
-    policy_lines = describe_fn() if callable(describe_fn) else []
+    policy_lines = describe_augmentation_policy()
     return augmenter, [str(line) for line in policy_lines]
 
 
@@ -655,7 +633,7 @@ def run_training_pipeline(
         for description in augmentation_policy:
             print("- {}".format(description))
     else:
-        print("- Augmentasi train aktif dari 3.augmentasi.py")
+        print("- Augmentasi train aktif dari src/datasets/transforms.py")
 
     input_shape = (args.image_size, args.image_size, 3)
     train_ds = make_dataset(
@@ -979,7 +957,12 @@ def run_training_pipeline(
 
 def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--dataset-dir", type=str, default="dataset/split", help="Folder dataset hasil split.")
+    parser.add_argument(
+        "--dataset-dir",
+        type=str,
+        default="dataset/split/parkinson_multiclass",
+        help="Folder dataset hasil split.",
+    )
     parser.add_argument("--dataset-name", type=str, default="default_dataset", help="ID dataset (untuk path artifact).")
     parser.add_argument(
         "--training-method",

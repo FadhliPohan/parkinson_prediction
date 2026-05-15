@@ -7,7 +7,7 @@ def configure_cuda_library_path() -> None:
     if os.environ.get("PARKINSON_CUDA_ENV_READY") == "1":
         return
 
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     lib_dirs = []
     for nvidia_root in sorted((project_root / ".venv" / "lib").glob("python*/site-packages/nvidia")):
         for lib_dir in sorted(nvidia_root.glob("*/lib")):
@@ -30,25 +30,20 @@ def configure_cuda_library_path() -> None:
 
 
 configure_cuda_library_path()
+import tensorflow as tf
 
 from training_common import build_common_arg_parser, run_training_pipeline
-from transformer_backbones import (
-    TRANSFORMER_CUSTOM_OBJECTS,
-    build_swin_transformer_backbone,
-    transformer_preprocess_input,
-)
 
 
 def main() -> None:
-    parser = build_common_arg_parser("Training klasifikasi Parkinson dengan Swin Transformer.")
+    parser = build_common_arg_parser("Training klasifikasi Parkinson dengan DenseNet121.")
     args = parser.parse_args()
 
     run_training_pipeline(
-        model_name="swintransformer",
-        backbone_builder=build_swin_transformer_backbone,
-        preprocess_fn=transformer_preprocess_input,
+        model_name="densenet121",
+        backbone_builder=tf.keras.applications.DenseNet121,
+        preprocess_fn=tf.keras.applications.densenet.preprocess_input,
         args=args,
-        custom_objects=TRANSFORMER_CUSTOM_OBJECTS,
     )
 
 

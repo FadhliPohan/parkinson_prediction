@@ -26,7 +26,7 @@ from sklearn.metrics import (
 from sklearn.preprocessing import label_binarize
 from ultralytics import YOLO
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -851,7 +851,12 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Training klasifikasi Parkinson dengan YOLOv8.")
-    parser.add_argument("--dataset-dir", type=str, default="dataset/split", help="Folder dataset hasil split.")
+    parser.add_argument(
+        "--dataset-dir",
+        type=str,
+        default="dataset/split/parkinson_multiclass",
+        help="Folder dataset hasil split.",
+    )
     parser.add_argument("--dataset-name", type=str, default="default_dataset", help="ID dataset (untuk path artifact).")
     parser.add_argument(
         "--training-method",

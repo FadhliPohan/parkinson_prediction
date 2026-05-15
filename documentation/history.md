@@ -108,3 +108,88 @@ Implementasi refactor arsitektur dinamis sampai runnable: registry dataset/model
 1. Menjalankan training penuh (all model + all method) sesuai resource yang tersedia.
 2. Membersihkan report/model lama (jika diperlukan) dan memulai eksperimen ulang dari skema baru.
 3. Menambahkan method tambahan sesuai kebutuhan eksperimen lanjutan.
+
+## 2026-05-15  (Asia/Jakarta) - Sesi 3
+
+### Tujuan sesi
+Menyelesaikan pekerjaan yang tersisa, menyesuaikan struktur file dengan rekomendasi, dan membersihkan file/folder yang tidak terpakai.
+
+### Aktivitas yang sudah dilakukan
+1. Menambahkan modul augmentasi terpusat:
+   - `src/datasets/transforms.py`
+2. Merapikan `3.augmentasi.py` menjadi wrapper CLI tipis yang memanggil modul transform terpusat.
+3. Mengubah `model/training_common.py` agar tidak lagi load augmentasi dari file script dengan `importlib`, tetapi langsung dari `src/datasets/transforms.py`.
+4. Menambah struktur trainer per framework:
+   - `src/training/cli_args.py`
+   - `src/training/tensorflow_trainer.py`
+   - `src/training/pytorch_trainer.py`
+   - `src/training/yolo_trainer.py`
+   - `src/training/trainer.py` di-refactor menjadi dispatcher runner per framework.
+5. Menambahkan struktur folder rekomendasi:
+   - `dataset/processed/.gitkeep`
+   - `model/legacy_or_wrappers/README.md`
+6. Cleanup file/folder tidak terpakai:
+   - hapus `method/` (kosong)
+   - hapus `main.ipynb` (kosong)
+   - hapus `dataset_distribution.png` lama
+   - hapus seluruh `__pycache__` dan `*.pyc`
+   - hapus artifact report/model format lama (`report/<model>/...` dan `trained_models/<model>/...`), sisakan struktur baru berbasis dataset.
+7. Update dokumentasi arsitektur dan aplikasi agar sinkron dengan struktur final.
+
+### Temuan penting
+1. Import TensorFlow di level modul transform menyebabkan `train.py`/`3.augmentasi.py` gagal di Python non-venv.
+2. Solusi: lazy import TensorFlow di `src/datasets/transforms.py` sehingga fungsi ringkasan augmentasi tetap bisa dipakai tanpa TensorFlow aktif di interpreter tersebut.
+
+### Validasi yang dilakukan
+1. `python3 -m compileall -q .` -> sukses.
+2. `python3 3.augmentasi.py --dataset-dir dataset/split/parkinson_multiclass` -> sukses.
+3. `python3 train.py ... --augment-info ...` smoke test -> sukses, training tetap berjalan dan report/artifact baru terbentuk.
+
+### Keputusan
+1. Struktur pipeline dipertahankan dinamis dengan registry + trainer dispatcher per framework.
+2. Script nomor (`1.check_dataset.py`, `2.split_data_testing.py`, `3.augmentasi.py`) tetap dipertahankan sebagai entrypoint CLI kompatibilitas, tetapi logika inti sudah dipusatkan ke `src/`.
+3. Artifact lama dibersihkan agar dashboard dan report reader fokus pada skema baru.
+
+### Next step
+1. Menambahkan model tambahan ke registry setelah script worker siap.
+2. Menjalankan full experiment (`all models + all methods`) pada dataset final.
+3. Opsional: migrasi bertahap script worker legacy dari `model/` ke wrapper area `model/legacy_or_wrappers/` atau trainer native penuh di `src/training/`.
+
+## 2026-05-15  (Asia/Jakarta) - Sesi 4
+
+### Tujuan sesi
+Menyamakan struktur folder/file agar lebih dekat ke struktur rekomendasi final di `requirements.md`.
+
+### Aktivitas yang sudah dilakukan
+1. Menambahkan sub-folder model framework pada `src/models/`:
+   - `src/models/tensorflow_models/`
+   - `src/models/pytorch_models/`
+   - `src/models/yolo_models/`
+2. Membuat `documentation/arsitectur.md` sebagai mirror dari `documentation/architecture.md`.
+3. Membersihkan split legacy lama:
+   - hapus `dataset/split/train`
+   - hapus `dataset/split/testing`
+   - hapus `dataset/split/validation`
+   - mempertahankan hanya struktur baru `dataset/split/parkinson_multiclass/...`
+4. Memindahkan seluruh script model legacy ke `model/legacy_or_wrappers/`.
+5. Mengupdate `configs/models.yaml` agar seluruh `script_path` mengarah ke `model/legacy_or_wrappers/*.py`.
+6. Menyesuaikan path root pada script legacy yang dipindah (`parents[1]` -> `parents[2]`) agar runtime tetap benar.
+7. Menyesuaikan default `--dataset-dir` pada trainer legacy ke `dataset/split/parkinson_multiclass`.
+8. Menghapus file/folder tidak terpakai:
+   - `referensi_jurnal/`
+   - PDF jurnal duplikat lama di root proyek
+9. Sinkronisasi loader inference agar import custom object transformer tetap mengarah ke lokasi model legacy baru.
+
+### Validasi yang dilakukan
+1. `python3 1.check_dataset.py --dataset parkinson_multiclass` -> sukses.
+2. `python3 3.augmentasi.py --dataset-dir dataset/split/parkinson_multiclass` -> sukses.
+3. `python3 train.py ... --models mobilenetv2 --method baseline` smoke test -> sukses.
+
+### Keputusan
+1. Struktur `model/` dipusatkan untuk area legacy/wrapper saja.
+2. Struktur split lama dibersihkan agar tidak membingungkan alur dataset baru.
+3. Dokumentasi arsitektur disediakan dalam dua nama file (`architecture.md` dan `arsitectur.md`) untuk memenuhi kebutuhan eksplisit di requirement.
+
+### Next step
+1. Menjalankan training penuh lintas semua model/method pada struktur final.
+2. Menambahkan model baru langsung ke registry jika dibutuhkan.
