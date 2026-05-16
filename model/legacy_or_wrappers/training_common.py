@@ -966,7 +966,7 @@ def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset-dir",
         type=str,
-        default="dataset/split/parkinson_multiclass",
+        default="dataset/split/parkinson_merder",
         help="Folder dataset hasil split.",
     )
     parser.add_argument("--dataset-name", type=str, default="default_dataset", help="ID dataset (untuk path artifact).")

@@ -1,3 +1,15 @@
+## Catatan Status Implementasi (Update: 2026-05-16)
+- Dokumen ini adalah requirement awal proyek (historical requirement).
+- Status implementasi terkini dapat dilihat di:
+  - `documentation/architecture.md`
+  - `documentation/arsitectur.md`
+  - `documentation/dokumentasi_aplikasi.md`
+- Fitur terbaru yang sudah aktif di pipeline:
+  - Registry dataset/model/method dinamis.
+  - Split dataset otomatis dengan balancing kelas sebelum split.
+  - Balancing kelas menggunakan augmentasi rotasi kecil `-20` s/d `+20` derajat untuk kelas minoritas.
+  - Report dan artifact training berbasis struktur `report/<dataset>/<model>/<run_id>`.
+
 Kamu adalah Senior Software Architect, Machine Learning Engineer, dan Web Application Engineer yang ahli dalam Python, TensorFlow/Keras, PyTorch, Ultralytics YOLO, Streamlit, struktur project ML, pipeline training, reporting, dan dokumentasi teknis.
 
 Saya sedang membangun aplikasi web/pipeline machine learning untuk klasifikasi gambar, saat ini digunakan untuk klasifikasi Parkinson vs Healthy berdasarkan gambar hand-drawing.

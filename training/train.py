@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -66,6 +66,25 @@ def _parse_models_arg(models_arg: str, registry: ModelRegistry) -> List[str]:
     unknown = [m for m in requested if m not in available]
     if unknown:
         raise ValueError("Model tidak ditemukan: {}".format(", ".join(unknown)))
+    return requested
+
+
+def _resolve_dataset_ids(dataset_arg: Optional[str], registry: DatasetRegistry) -> List[str]:
+    if dataset_arg is None or not str(dataset_arg).strip():
+        return [registry.default_dataset]
+
+    normalized = str(dataset_arg).strip().lower()
+    if normalized in {"all", "*"}:
+        return registry.list_dataset_ids()
+
+    requested = [item.strip() for item in str(dataset_arg).split(",") if item.strip()]
+    if not requested:
+        raise ValueError("Argumen --dataset kosong")
+
+    available = set(registry.list_dataset_ids())
+    unknown = [dataset_id for dataset_id in requested if dataset_id not in available]
+    if unknown:
+        raise ValueError("Dataset tidak ditemukan: {}".format(", ".join(unknown)))
     return requested
 
 
@@ -138,7 +157,12 @@ def _collect_user_overrides(args: argparse.Namespace) -> Dict[str, Any]:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Dynamic training orchestrator untuk project Parkinson.")
-    parser.add_argument("--dataset", type=str, default=None, help="ID dataset dari configs/datasets.yaml")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="ID dataset dari configs/datasets.yaml, daftar dipisah koma, atau 'all'.",
+    )
     parser.add_argument("--method", type=str, default=None, help="ID training method")
     parser.add_argument("--all-methods", action="store_true", help="Jalankan semua method yang terdaftar")
     parser.add_argument("--models", type=str, default="all", help="List model dipisah koma, atau 'all'")
@@ -201,8 +225,7 @@ def main() -> None:
     method_registry = TrainingMethodRegistry()
     model_registry = ModelRegistry()
 
-    dataset_id = args.dataset or dataset_registry.default_dataset
-    dataset_cfg = dataset_registry.get(dataset_id)
+    dataset_ids = _resolve_dataset_ids(args.dataset, dataset_registry)
 
     model_ids = _parse_models_arg(args.models, model_registry)
     model_cfgs = [model_registry.get(model_id) for model_id in model_ids if model_registry.get(model_id).enabled]
@@ -212,80 +235,95 @@ def main() -> None:
 
     user_overrides = _collect_user_overrides(args)
 
-    if args.check_first:
-        _print_dataset_preview(
-            dataset_id=dataset_cfg.dataset_id,
-            dataset_dir=dataset_cfg.original_path,
-            class_mode=dataset_cfg.class_mode,
-            extensions=dataset_cfg.valid_extensions,
-        )
-
-    if args.split_first:
-        print("\n=== Split Dataset ===")
-        split_manifest = split_dataset(
-            original_dir=dataset_cfg.original_path,
-            split_dir=dataset_cfg.split_path,
-            class_mode=dataset_cfg.class_mode,
-            extensions=dataset_cfg.valid_extensions,
-            split_cfg=dataset_cfg.split,
-            resize_cfg=dataset_cfg.resize,
-            seed=int(user_overrides.get("seed", dataset_cfg.seed)),
-        )
-        print("Split selesai. Manifest:", dataset_cfg.split_path / "_metadata" / "split_manifest.json")
-        split_stats = split_manifest.get("split_stats", {})
-        for split_name in ["train", "testing", "validation"]:
-            total = sum(int(v) for v in split_stats.get(split_name, {}).values())
-            print(f"- {split_name:10s}: {total} gambar")
-
-    if args.augment_info:
-        rc = _run_augment_info(dataset_cfg.split_path)
-        if rc != 0:
-            raise SystemExit(rc)
-
-    print("\n=== Eksekusi Training ===")
-    print("Dataset :", dataset_cfg.dataset_id)
-    print("Models  :", ", ".join([m.model_id for m in model_cfgs]))
-    print("Methods :", ", ".join(method_ids))
-    print("Preproc :", ", ".join([str(item["label"]) for item in preprocessing_plan]))
-
     overall_failed: List[str] = []
+    for dataset_id in dataset_ids:
+        dataset_cfg = dataset_registry.get(dataset_id)
 
-    for method_id in method_ids:
-        for preproc in preprocessing_plan:
-            method_cfg = method_registry.get(method_id)
-            training_params = build_training_params(method=method_cfg, user_overrides=user_overrides)
-            training_params["disable_augmentation"] = bool(preproc["disable_augmentation"])
+        print("\n" + "=" * 72)
+        print("Dataset Aktif:", dataset_cfg.dataset_id)
+        print("=" * 72)
 
-            effective_method_id = (
-                str(method_id)
-                if len(preprocessing_plan) == 1
-                else "{}__{}".format(method_id, preproc["id"])
+        if args.check_first:
+            _print_dataset_preview(
+                dataset_id=dataset_cfg.dataset_id,
+                dataset_dir=dataset_cfg.original_path,
+                class_mode=dataset_cfg.class_mode,
+                extensions=dataset_cfg.valid_extensions,
             )
 
-            print("\n--- Method: {} | Preprocessing: {} ---".format(method_id, preproc["label"]))
-            status_map = run_training_jobs(
-                models=model_cfgs,
-                dataset_cfg=dataset_cfg,
-                method_id=effective_method_id,
-                training_params=training_params,
-                report_root=REPORT_ROOT,
-                models_root=TRAINED_MODELS_ROOT,
-                stop_on_error=args.stop_on_error,
+        if args.split_first:
+            print("\n=== Split Dataset ===")
+            split_manifest = split_dataset(
+                original_dir=dataset_cfg.original_path,
+                split_dir=dataset_cfg.split_path,
+                class_mode=dataset_cfg.class_mode,
+                extensions=dataset_cfg.valid_extensions,
+                split_cfg=dataset_cfg.split,
+                resize_cfg=dataset_cfg.resize,
+                seed=int(user_overrides.get("seed", dataset_cfg.seed)),
             )
-
-            failed = pick_failed_models(status_map)
-            if failed:
-                overall_failed.extend([f"{effective_method_id}:{model_id}" for model_id in failed])
-                print("Model gagal:", ", ".join(failed))
-                if args.stop_on_error:
-                    break
+            print("Split selesai. Manifest:", dataset_cfg.split_path / "_metadata" / "split_manifest.json")
+            split_stats = split_manifest.get("split_stats", {})
+            for split_name in ["train", "testing", "validation"]:
+                total = sum(int(v) for v in split_stats.get(split_name, {}).values())
+                print(f"- {split_name:10s}: {total} gambar")
+            balancing_info = split_manifest.get("class_balancing", {})
+            if balancing_info.get("applied"):
+                print("Balancing  : aktif, total augmentasi =", balancing_info.get("total_generated", 0))
             else:
-                print(
-                    "Semua model sukses untuk method {} dengan preprocessing {}".format(
-                        method_id, preproc["label"]
-                    )
+                print("Balancing  : tidak perlu (kelas sudah seimbang)")
+
+        if args.augment_info:
+            rc = _run_augment_info(dataset_cfg.split_path)
+            if rc != 0:
+                raise SystemExit(rc)
+
+        print("\n=== Eksekusi Training ===")
+        print("Dataset :", dataset_cfg.dataset_id)
+        print("Models  :", ", ".join([m.model_id for m in model_cfgs]))
+        print("Methods :", ", ".join(method_ids))
+        print("Preproc :", ", ".join([str(item["label"]) for item in preprocessing_plan]))
+
+        for method_id in method_ids:
+            for preproc in preprocessing_plan:
+                method_cfg = method_registry.get(method_id)
+                training_params = build_training_params(method=method_cfg, user_overrides=user_overrides)
+                training_params["disable_augmentation"] = bool(preproc["disable_augmentation"])
+
+                effective_method_id = (
+                    str(method_id)
+                    if len(preprocessing_plan) == 1
+                    else "{}__{}".format(method_id, preproc["id"])
                 )
 
+                print("\n--- Method: {} | Preprocessing: {} ---".format(method_id, preproc["label"]))
+                status_map = run_training_jobs(
+                    models=model_cfgs,
+                    dataset_cfg=dataset_cfg,
+                    method_id=effective_method_id,
+                    training_params=training_params,
+                    report_root=REPORT_ROOT,
+                    models_root=TRAINED_MODELS_ROOT,
+                    stop_on_error=args.stop_on_error,
+                )
+
+                failed = pick_failed_models(status_map)
+                if failed:
+                    overall_failed.extend(
+                        [f"{dataset_cfg.dataset_id}:{effective_method_id}:{model_id}" for model_id in failed]
+                    )
+                    print("Model gagal:", ", ".join(failed))
+                    if args.stop_on_error:
+                        break
+                else:
+                    print(
+                        "Semua model sukses untuk method {} dengan preprocessing {}".format(
+                            method_id, preproc["label"]
+                        )
+                    )
+
+            if args.stop_on_error and overall_failed:
+                break
         if args.stop_on_error and overall_failed:
             break
 

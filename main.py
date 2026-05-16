@@ -125,6 +125,23 @@ def ask_preprocessing_mode() -> str:
     return selected.split(" ", 1)[0].strip()
 
 
+def ask_dataset_target(dataset_registry: DatasetRegistry) -> str:
+    dataset_ids = dataset_registry.list_dataset_ids()
+    option_all = "all (jalankan berurutan semua dataset)"
+    options = dataset_ids + [option_all]
+    default_index = dataset_ids.index(dataset_registry.default_dataset)
+    selected = ask_choice("Pilih dataset", options, default_index=default_index)
+    if selected == option_all:
+        return "all"
+    return selected
+
+
+def resolve_dataset_targets(dataset_registry: DatasetRegistry, selected_dataset: str) -> List[str]:
+    if str(selected_dataset).strip().lower() in {"all", "*"}:
+        return dataset_registry.list_dataset_ids()
+    return [selected_dataset]
+
+
 def build_train_command(
     dataset_id: str,
     models: str,
@@ -220,7 +237,6 @@ def main() -> None:
         model_registry = ModelRegistry()
         method_registry = TrainingMethodRegistry()
 
-        dataset_ids = dataset_registry.list_dataset_ids()
         model_ids = model_registry.list_model_ids(enabled_only=True)
         method_ids = method_registry.list_method_ids()
 
@@ -235,15 +251,19 @@ def main() -> None:
             install_environment()
             continue
 
-        selected_dataset = ask_choice("Pilih dataset", dataset_ids, default_index=dataset_ids.index(dataset_registry.default_dataset))
-        dataset_cfg = dataset_registry.get(selected_dataset)
+        selected_dataset = ask_dataset_target(dataset_registry)
+        target_datasets = resolve_dataset_targets(dataset_registry, selected_dataset)
 
         if choice == "2":
-            run_check_dataset(selected_dataset)
+            for dataset_id in target_datasets:
+                run_check_dataset(dataset_id)
         elif choice == "3":
-            run_split_dataset(selected_dataset)
+            for dataset_id in target_datasets:
+                run_split_dataset(dataset_id)
         elif choice == "4":
-            run_augment_info(str(dataset_cfg.split_path))
+            for dataset_id in target_datasets:
+                dataset_cfg = dataset_registry.get(dataset_id)
+                run_augment_info(str(dataset_cfg.split_path))
         elif choice == "5":
             selected_model = ask_choice("Pilih model", model_ids)
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))

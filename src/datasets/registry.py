@@ -56,14 +56,15 @@ class DatasetRegistry:
             )
 
         if self._default_dataset not in self._datasets:
-            self._default_dataset = sorted(self._datasets.keys())[0]
+            self._default_dataset = next(iter(self._datasets.keys()))
 
     @property
     def default_dataset(self) -> str:
         return str(self._default_dataset)
 
     def list_dataset_ids(self) -> List[str]:
-        return sorted(self._datasets.keys())
+        # Pertahankan urutan dari file config agar eksekusi "all" bisa deterministik.
+        return list(self._datasets.keys())
 
     def get(self, dataset_id: str) -> DatasetConfig:
         if dataset_id not in self._datasets:

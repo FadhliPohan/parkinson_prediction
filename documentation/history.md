@@ -249,3 +249,82 @@ Menyelaraskan pipeline agar benar-benar dinamis sesuai kebutuhan user:
 ### Next step
 1. Jika ingin menguji YOLO end-to-end, lakukan instalasi dependency penuh dari `requirements.txt` di `.venv`.
 2. Lanjutkan full experiment semua model + semua method + preprocessing mode sesuai resource komputasi.
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 6
+
+### Tujuan sesi
+1. Menambahkan balancing kelas otomatis sebelum split dataset.
+2. Mengupdate seluruh dokumentasi agar sesuai kondisi code terbaru.
+
+### Aktivitas yang sudah dilakukan
+1. Mengupdate `src/datasets/splitter.py`:
+   - menambahkan deteksi ketidakseimbangan kelas,
+   - menambahkan augmentasi rotasi kecil (`-20` s/d `+20` derajat) khusus kelas minoritas,
+   - menyejajarkan jumlah data tiap kelas ke kelas mayoritas sebelum split,
+   - menambahkan metadata baru ke split manifest (`class_balancing`, `split_generated_stats`),
+   - menaikkan `schema_version` split manifest ke `1.1.0`.
+2. Mengupdate `training/2.split_data_testing.py` agar menampilkan ringkasan balancing kelas.
+3. Mengupdate `training/train.py` agar output `--split-first` menampilkan status balancing.
+4. Menjalankan validasi:
+   - `python3 -m compileall -q ...` sukses,
+   - split dataset `parkinson_multiclass` sukses,
+   - uji mini dataset seimbang/tidak seimbang sukses.
+5. Mengupdate dokumentasi berikut agar sinkron:
+   - `documentation/architecture.md`,
+   - `documentation/arsitectur.md` (mirror),
+   - `documentation/dokumentasi_aplikasi.md`,
+   - `documentation/requirements.md` (catatan status implementasi terbaru),
+   - `documentation/history.md` (entry sesi ini).
+
+### Temuan penting
+1. Dataset `parkinson_multiclass` awal tidak seimbang, sehingga balancing aktif.
+2. Balancing menambah data hanya pada kelas minoritas, sesuai kebutuhan user.
+3. Informasi jumlah data hasil augmentasi kini terdokumentasi jelas di manifest split.
+
+### Keputusan
+1. Balancing kelas diletakkan di pipeline split agar berlaku konsisten untuk semua entrypoint (`train.py` maupun script split langsung).
+2. Rentang rotasi augmentation balancing ditetapkan tetap pada `-20` s/d `+20` derajat.
+3. Dokumen `architecture.md` dijadikan sumber utama; `arsitectur.md` dipertahankan sebagai mirror kompatibilitas.
+
+### Next step
+1. Jika diperlukan, tambahkan opsi konfigurasi untuk mengaktifkan/menonaktifkan balancing per dataset di `configs/datasets.yaml`.
+2. Pertimbangkan balancing yang hanya diterapkan pada split train (opsional eksperimen lanjutan).
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 7
+
+### Tujuan sesi
+1. Menambahkan opsi training semua dataset secara berurutan.
+2. Menghapus opsi dataset multiclass dari konfigurasi aktif.
+
+### Aktivitas yang sudah dilakukan
+1. Mengupdate `configs/datasets.yaml`:
+   - menghapus entry `parkinson_multiclass`,
+   - mengubah default dataset menjadi `parkinson_merder`.
+2. Mengupdate `src/datasets/registry.py`:
+   - urutan dataset mengikuti urutan pada file config (tidak di-sort alfabet),
+   - fallback default dataset mengikuti dataset pertama pada config.
+3. Mengupdate `training/train.py`:
+   - menambahkan dukungan `--dataset all`,
+   - menambahkan dukungan list dataset dipisah koma,
+   - eksekusi training kini bisa loop beberapa dataset berurutan.
+4. Mengupdate `main.py`:
+   - pilihan dataset kini punya opsi `all (jalankan berurutan semua dataset)`,
+   - aksi check/split/augment bisa dijalankan berurutan untuk semua dataset,
+   - training dari menu meneruskan `--dataset all` ke orchestrator.
+5. Menyesuaikan default pada script lain agar tidak lagi mengarah ke split multiclass:
+   - `training/3.augmentasi.py`
+   - `model/legacy_or_wrappers/training_common.py`
+   - `model/legacy_or_wrappers/yolov8.py`
+6. Memperbarui dokumentasi agar sinkron:
+   - `documentation/architecture.md`
+   - `documentation/arsitectur.md`
+   - `documentation/dokumentasi_aplikasi.md`
+   - `documentation/history.md`
+
+### Keputusan
+1. Mode `all` dijalankan sesuai urutan dataset pada `configs/datasets.yaml`, sehingga saat ini urutannya: `parkinson_merder` lalu `parkinson_mixing`.
+2. Dataset multiclass dinonaktifkan dari opsi aktif sesuai permintaan user.
+
+### Next step
+1. Jika nanti dibutuhkan lagi, `parkinson_multiclass` bisa dikembalikan sebagai dataset opsional terpisah di config.
+2. Tambahkan unit/integration test kecil untuk validasi mode `--dataset all` jika project ingin menambah coverage test otomatis.

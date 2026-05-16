@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument(
         "--dataset-dir",
         type=str,
-        default="dataset/split/parkinson_multiclass",
+        default="dataset/split/parkinson_merder",
         help="Folder dataset split yang berisi train/testing/validation.",
     )
     args = parser.parse_args()

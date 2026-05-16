@@ -64,6 +64,21 @@ def main() -> None:
         per_class = split_stats.get(split_name, {})
         total = sum(int(v) for v in per_class.values())
         print(f"- {split_name:10s}: {total} gambar | {len(per_class)} kelas")
+    balancing_info = manifest.get("class_balancing", {})
+    if balancing_info:
+        print("\n=== Ringkasan Balancing Kelas ===")
+        if balancing_info.get("applied"):
+            print("Status      : Aktif (dataset awal tidak seimbang)")
+            print("Strategi    :", balancing_info.get("strategy", "-"))
+            print("Target/kelas:", balancing_info.get("target_per_class", "-"))
+            print("Total tambah:", balancing_info.get("total_generated", 0))
+            generated_per_class = balancing_info.get("generated_per_class", {})
+            for class_name in sorted(generated_per_class.keys()):
+                generated = int(generated_per_class[class_name])
+                if generated > 0:
+                    print(f"- {class_name}: +{generated} gambar rotasi")
+        else:
+            print("Status      : Tidak perlu (dataset sudah seimbang)")
     print("Split selesai.")
 
 
