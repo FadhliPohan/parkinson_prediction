@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple
@@ -9,18 +10,31 @@ from .schemas import RUN_MANIFEST_FILE, SCHEMA_VERSION
 
 
 def generate_run_id() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def _sanitize_path_token(value: str, fallback: str) -> str:
+    token = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value).strip())
+    token = token.strip("-")
+    return token or fallback
 
 
 def build_artifact_dirs(
     report_root: Path,
     models_root: Path,
     dataset_name: str,
+    augmentation_id: str,
+    method_id: str,
     model_name: str,
     run_id: str,
 ) -> Tuple[Path, Path, Path, Path]:
-    report_dataset_root = report_root / dataset_name / model_name
-    models_dataset_root = models_root / dataset_name / model_name
+    dataset_token = _sanitize_path_token(dataset_name, "default_dataset")
+    augmentation_token = _sanitize_path_token(augmentation_id, "default_augmentation")
+    method_token = _sanitize_path_token(method_id, "default_method")
+    model_token = _sanitize_path_token(model_name, "default_model")
+
+    report_dataset_root = report_root / dataset_token / augmentation_token / method_token / model_token
+    models_dataset_root = models_root / dataset_token / augmentation_token / method_token / model_token
     report_dataset_root.mkdir(parents=True, exist_ok=True)
     models_dataset_root.mkdir(parents=True, exist_ok=True)
 

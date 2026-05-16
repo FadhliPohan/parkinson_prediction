@@ -18,6 +18,7 @@ class DatasetConfig:
     valid_extensions: List[str]
     split: Dict[str, float]
     resize: Dict[str, object]
+    augmentation_options: List[str]
 
     @property
     def original_path(self):
@@ -53,6 +54,7 @@ class DatasetRegistry:
                 ),
                 split=dict(item.get("split", {})),
                 resize=dict(item.get("resize", {})),
+                augmentation_options=list(item.get("augmentation_options", [])),
             )
 
         if self._default_dataset not in self._datasets:

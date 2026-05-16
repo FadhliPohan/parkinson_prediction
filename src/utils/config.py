@@ -34,6 +34,10 @@ def load_methods_config(path: Optional[Path] = None) -> Dict[str, Any]:
     return _load_yaml(path or (CONFIGS_DIR / "training_methods.yaml"))
 
 
+def load_augmentations_config(path: Optional[Path] = None) -> Dict[str, Any]:
+    return _load_yaml(path or (CONFIGS_DIR / "augmentations.yaml"))
+
+
 def load_default_training_config(path: Optional[Path] = None) -> Dict[str, Any]:
     return _load_yaml(path or (CONFIGS_DIR / "default_training.yaml"))
 

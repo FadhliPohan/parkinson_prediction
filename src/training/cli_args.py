@@ -47,8 +47,11 @@ def build_context_args(
     method_id: str,
     report_root: Path,
     models_root: Path,
+    augmentation_id: str,
+    augmentation_label: str,
+    experiment_id: str,
 ) -> List[str]:
-    return [
+    args = [
         "--dataset-dir",
         str(dataset_cfg.split_path),
         "--dataset-name",
@@ -60,3 +63,10 @@ def build_context_args(
         "--models-root",
         str(models_root),
     ]
+    if augmentation_id:
+        args.extend(["--augmentation-id", str(augmentation_id)])
+    if augmentation_label:
+        args.extend(["--augmentation-label", str(augmentation_label)])
+    if experiment_id:
+        args.extend(["--experiment-id", str(experiment_id)])
+    return args

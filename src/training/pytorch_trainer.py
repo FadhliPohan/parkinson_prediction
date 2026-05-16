@@ -15,6 +15,9 @@ def run_pytorch_training(
     training_params: Dict[str, Any],
     report_root: Path,
     models_root: Path,
+    augmentation_id: str = "",
+    augmentation_label: str = "",
+    experiment_id: str = "",
 ) -> int:
     # Saat ini workflow PyTorch di project ini menggunakan runner YOLO classification.
     return run_yolo_training(
@@ -24,4 +27,7 @@ def run_pytorch_training(
         training_params=training_params,
         report_root=report_root,
         models_root=models_root,
+        augmentation_id=augmentation_id,
+        augmentation_label=augmentation_label,
+        experiment_id=experiment_id,
     )

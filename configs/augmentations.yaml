@@ -1,0 +1,13 @@
+defaults:
+  default_augmentation: augment_on_the_fly
+
+augmentations:
+  no_augment:
+    label: "tanpa_augmentasi"
+    description: "Gunakan data train asli tanpa augmentasi on-the-fly."
+    disable_augmentation: true
+
+  augment_on_the_fly:
+    label: "augmentasi_on_the_fly"
+    description: "Aktifkan pipeline augmentasi train on-the-fly dari src/datasets/transforms.py."
+    disable_augmentation: false

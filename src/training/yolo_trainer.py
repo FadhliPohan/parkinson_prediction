@@ -18,6 +18,9 @@ def run_yolo_training(
     training_params: Dict[str, Any],
     report_root: Path,
     models_root: Path,
+    augmentation_id: str = "",
+    augmentation_label: str = "",
+    experiment_id: str = "",
 ) -> int:
     script_path = model_cfg.script_abs_path
     if not script_path.exists():
@@ -30,6 +33,9 @@ def run_yolo_training(
             method_id=method_id,
             report_root=report_root,
             models_root=models_root,
+            augmentation_id=augmentation_id,
+            augmentation_label=augmentation_label,
+            experiment_id=experiment_id,
         )
     )
 

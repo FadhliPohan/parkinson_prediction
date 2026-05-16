@@ -543,8 +543,52 @@ def load_training_history(train_save_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _first_existing_series(history_df: pd.DataFrame, candidates: List[str]) -> Optional[pd.Series]:
+    for col in candidates:
+        if col in history_df.columns:
+            return history_df[col]
+    return None
+
+
+def extract_final_training_metrics(history_df: pd.DataFrame) -> Dict[str, float]:
+    if history_df.empty:
+        return {
+            "train_accuracy": float("nan"),
+            "val_accuracy": float("nan"),
+            "train_loss": float("nan"),
+            "val_loss": float("nan"),
+            "epochs_trained": 0,
+        }
+
+    train_acc = _first_existing_series(
+        history_df,
+        ["metrics/accuracy_top1", "train/accuracy", "accuracy"],
+    )
+    val_acc = _first_existing_series(
+        history_df,
+        ["val/accuracy_top1", "val_accuracy", "validation_accuracy"],
+    )
+    train_loss = _first_existing_series(
+        history_df,
+        ["train/loss", "train/cls_loss", "loss"],
+    )
+    val_loss = _first_existing_series(
+        history_df,
+        ["val/loss", "val/cls_loss", "val_loss"],
+    )
+
+    return {
+        "train_accuracy": float(train_acc.iloc[-1]) if train_acc is not None and len(train_acc) else float("nan"),
+        "val_accuracy": float(val_acc.iloc[-1]) if val_acc is not None and len(val_acc) else float("nan"),
+        "train_loss": float(train_loss.iloc[-1]) if train_loss is not None and len(train_loss) else float("nan"),
+        "val_loss": float(val_loss.iloc[-1]) if val_loss is not None and len(val_loss) else float("nan"),
+        "epochs_trained": int(len(history_df)),
+    }
+
+
 def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
-    run_started_at = datetime.now().astimezone().isoformat()
+    run_started_dt = datetime.now().astimezone()
+    run_started_at = run_started_dt.isoformat()
     set_global_seed(args.seed)
     configure_cpu_runtime(
         max_cpu_usage_percent=args.max_cpu_usage_percent,
@@ -568,6 +612,8 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
         report_root=report_root,
         models_root=models_root,
         dataset_name=dataset_name,
+        augmentation_id=args.augmentation_id,
+        method_id=args.training_method,
         model_name="yolov8",
         run_id=run_id,
     )
@@ -719,6 +765,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
         zero_division=0,
     )
 
+    final_train_metrics = extract_final_training_metrics(history_df)
+    run_finished_dt = datetime.now().astimezone()
+    run_finished_at = run_finished_dt.isoformat()
+    training_time_seconds = float((run_finished_dt - run_started_dt).total_seconds())
+
     metrics_summary = {
         "device_used": "cpu" if final_compute_device == "cpu" else "gpu",
         "accuracy": float(test_accuracy),
@@ -732,6 +783,12 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
         "test_samples_total": int(test_total),
         "epochs_total": int(max(1, int(args.epochs) + max(0, int(args.fine_tune_epochs)))),
         "yolo_variant": "yolov8{}-cls".format(args.yolo_size),
+        "train_accuracy": final_train_metrics.get("train_accuracy"),
+        "val_accuracy": final_train_metrics.get("val_accuracy"),
+        "train_loss": final_train_metrics.get("train_loss"),
+        "val_loss": final_train_metrics.get("val_loss"),
+        "epochs_trained": final_train_metrics.get("epochs_trained"),
+        "training_time_seconds": training_time_seconds,
     }
 
     classification_df = pd.DataFrame(cls_report).transpose()
@@ -770,22 +827,44 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
     with open(str(run_model_dir / "class_names.json"), "w", encoding="utf-8") as fp:
         json.dump(class_names, fp, indent=2)
 
-    run_finished_at = datetime.now().astimezone().isoformat()
-
     run_summary_lines = [
         "Model: yolov8",
         "Dataset Name: {}".format(dataset_name),
+        "Augmentation ID: {}".format(args.augmentation_id),
+        "Augmentation Label: {}".format(args.augmentation_label),
+        "Experiment ID: {}".format(args.experiment_id),
+        "Training Method: {}".format(args.training_method),
         "Run ID: {}".format(run_id),
         "Dataset: {}".format(dataset_dir),
         "Dataset view: {}".format(dataset_view_dir),
         "Report dir: {}".format(run_report_dir),
         "Model dir: {}".format(run_model_dir),
-        "Training Method: {}".format(args.training_method),
         "Best model: {}".format(best_model_path),
         "Final model: {}".format(final_model_path),
         "Device: {}".format("CPU" if final_compute_device == "cpu" else "GPU"),
+        "Train Accuracy (last): {}".format(
+            "{:.4f}".format(metrics_summary["train_accuracy"])
+            if not np.isnan(metrics_summary["train_accuracy"])
+            else "NaN"
+        ),
+        "Validation Accuracy (last): {}".format(
+            "{:.4f}".format(metrics_summary["val_accuracy"])
+            if not np.isnan(metrics_summary["val_accuracy"])
+            else "NaN"
+        ),
+        "Train Loss (last): {}".format(
+            "{:.4f}".format(metrics_summary["train_loss"])
+            if not np.isnan(metrics_summary["train_loss"])
+            else "NaN"
+        ),
+        "Validation Loss (last): {}".format(
+            "{:.4f}".format(metrics_summary["val_loss"])
+            if not np.isnan(metrics_summary["val_loss"])
+            else "NaN"
+        ),
         "Accuracy: {:.4f}".format(metrics_summary["accuracy"]),
         "F1-score: {:.4f}".format(metrics_summary["f1_score"]),
+        "Training Time (s): {:.2f}".format(training_time_seconds),
         "ROC-AUC: {}".format(
             "{:.4f}".format(metrics_summary["roc_auc"])
             if not np.isnan(metrics_summary["roc_auc"])
@@ -797,6 +876,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
 
     run_manifest = {
         "schema_version": "2.0.0",
+        "experiment_id": args.experiment_id,
         "run_id": run_id,
         "run_started_at": run_started_at,
         "run_finished_at": run_finished_at,
@@ -818,8 +898,12 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Path]:
         },
         "training": {
             "method": args.training_method,
+            "augmentation_id": args.augmentation_id,
+            "augmentation_label": args.augmentation_label,
+            "experiment_id": args.experiment_id,
             "parameters": vars(args),
             "device_used": "cpu" if final_compute_device == "cpu" else "gpu",
+            "duration_seconds": training_time_seconds,
         },
         "artifacts": {
             "report_dir": str(run_report_dir),
@@ -866,6 +950,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="transfer_learning",
         help="ID metode training (untuk metadata run).",
+    )
+    parser.add_argument(
+        "--augmentation-id",
+        type=str,
+        default="augment_on_the_fly",
+        help="ID skenario augmentasi (untuk metadata run).",
+    )
+    parser.add_argument(
+        "--augmentation-label",
+        type=str,
+        default="augmentasi_on_the_fly",
+        help="Label skenario augmentasi (untuk metadata run).",
+    )
+    parser.add_argument(
+        "--experiment-id",
+        type=str,
+        default="",
+        help="ID unik eksperimen untuk kombinasi dataset/augmentasi/method/model.",
     )
     parser.add_argument(
         "--report-root",

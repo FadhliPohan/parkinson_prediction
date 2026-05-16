@@ -24,6 +24,9 @@ def run_model_training(
     training_params: Dict[str, Any],
     report_root: Path,
     models_root: Path,
+    augmentation_id: str = "",
+    augmentation_label: str = "",
+    experiment_id: str = "",
 ) -> int:
     framework = str(model_cfg.framework).strip().lower()
     runner = FRAMEWORK_RUNNERS.get(framework)
@@ -38,6 +41,9 @@ def run_model_training(
             training_params=training_params,
             report_root=report_root,
             models_root=models_root,
+            augmentation_id=augmentation_id,
+            augmentation_label=augmentation_label,
+            experiment_id=experiment_id,
         )
     )
 
@@ -49,9 +55,13 @@ def run_training_jobs(
     training_params: Dict[str, Any],
     report_root: Path,
     models_root: Path,
+    augmentation_id: str = "",
+    augmentation_label: str = "",
+    experiment_id_map: Dict[str, str] | None = None,
     stop_on_error: bool = True,
 ) -> Dict[str, int]:
     status_map: Dict[str, int] = {}
+    experiment_id_map = experiment_id_map or {}
     for model_cfg in models:
         rc = run_model_training(
             model_cfg=model_cfg,
@@ -60,6 +70,9 @@ def run_training_jobs(
             training_params=training_params,
             report_root=report_root,
             models_root=models_root,
+            augmentation_id=augmentation_id,
+            augmentation_label=augmentation_label,
+            experiment_id=experiment_id_map.get(model_cfg.model_id, ""),
         )
         status_map[model_cfg.model_id] = rc
         if rc != 0 and stop_on_error:

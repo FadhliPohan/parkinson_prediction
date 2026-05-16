@@ -5,25 +5,35 @@ Aplikasi ini adalah pipeline machine learning klasifikasi gambar berbasis termin
 
 Fitur inti saat ini:
 1. Pemilihan dataset dinamis lewat config.
-2. Pemilihan model dinamis lewat registry.
-3. Pemilihan method training dinamis.
-4. Split dataset otomatis dengan balancing kelas sebelum split.
-5. Report training terstandar untuk dibaca dashboard.
+2. Pemilihan augmentasi dinamis lewat registry.
+3. Pemilihan model dinamis lewat registry.
+4. Pemilihan method training dinamis.
+5. Split dataset otomatis dengan balancing kelas sebelum split.
+6. Eksekusi training per kombinasi eksperimen secara independen.
+7. Report training terstandar untuk dibaca dashboard.
 
 ## 2. Dataset yang Tersedia
 Berdasarkan `configs/datasets.yaml`:
 1. `parkinson_merder`
 2. `parkinson_mixing`
-3. `all` (opsi CLI untuk menjalankan semua dataset berurutan: Merder lalu Mixing)
+3. `all` (opsi CLI untuk menjalankan semua dataset berurutan)
 
-## 3. Method Training yang Tersedia
+## 3. Augmentasi Training yang Tersedia
+Berdasarkan `configs/augmentations.yaml`:
+1. `no_augment`
+2. `augment_on_the_fly`
+
+Catatan:
+- Setiap dataset bisa membatasi augmentasi yang boleh dipakai melalui `augmentation_options` di `configs/datasets.yaml`.
+
+## 4. Method Training yang Tersedia
 Berdasarkan `configs/training_methods.yaml`:
 1. `baseline`
 2. `transfer_learning` (default)
 3. `transfer_learning_mixed_precision`
 4. `full_fine_tuning`
 
-## 4. Model yang Tersedia
+## 5. Model yang Tersedia
 Berdasarkan `configs/models.yaml`:
 1. `mobilenetv2`
 2. `resnet50`
@@ -37,7 +47,7 @@ Berdasarkan `configs/models.yaml`:
 10. `deit`
 11. `yolov8`
 
-## 5. Mekanisme Balancing Dataset
+## 6. Mekanisme Balancing Dataset
 Balancing dilakukan di tahap split (`src/datasets/splitter.py`):
 1. Sistem cek jumlah gambar per kelas pada dataset original.
 2. Jika kelas tidak seimbang, hanya kelas minoritas yang ditambah.
@@ -46,10 +56,10 @@ Balancing dilakukan di tahap split (`src/datasets/splitter.py`):
 5. Setelah itu baru dilakukan split train/testing/validation.
 
 Catatan:
-- Balancing ini membuat file hasil augmentasi di folder split (bukan mengubah dataset original).
+- Balancing membuat file hasil augmentasi di area split (bukan mengubah dataset original).
 - Detail balancing tercatat di `_metadata/split_manifest.json`.
 
-## 6. Menjalankan Aplikasi
+## 7. Menjalankan Aplikasi
 
 ### A. Menu Terminal
 ```bash
@@ -67,26 +77,38 @@ python3 training/2.split_data_testing.py --dataset parkinson_merder
 ```
 
 ### D. Training dari CLI
-Contoh satu model satu method:
+Contoh satu kombinasi:
 ```bash
-python3 training/train.py --dataset parkinson_merder --models mobilenetv2 --method transfer_learning --preprocessing-mode augment
+python3 training/train.py \
+  --dataset parkinson_merder \
+  --augmentations augment_on_the_fly \
+  --models mobilenetv2 \
+  --method transfer_learning
 ```
 
-Contoh semua model semua method + split dulu untuk semua dataset:
+Contoh banyak kombinasi:
 ```bash
-python3 training/train.py --dataset all --models all --all-methods --preprocessing-mode both --split-first
+python3 training/train.py \
+  --dataset all \
+  --augmentations all \
+  --models all \
+  --method all \
+  --split-first
 ```
+
+Catatan kompatibilitas:
+- Opsi lama `--preprocessing-mode augment|no_augment|both` masih didukung.
 
 ### E. Dashboard Streamlit
 ```bash
 streamlit run web/app.py
 ```
 
-## 7. Struktur Output
+## 8. Struktur Output
 
 ### Report
 ```text
-report/<dataset_name>/<model_name>/<run_id>/
+report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
 ```
 File utama:
 - `run_manifest.json`
@@ -99,20 +121,38 @@ File utama:
 - `summary.txt`
 - visual `.png`
 
+Ringkasan eksekusi workflow:
+```text
+report/_workflow_runs/workflow_summary_<timestamp>.json
+report/_workflow_runs/workflow_summary_<timestamp>.csv
+```
+
 ### Model
 ```text
-trained_models/<dataset_name>/<model_name>/<run_id>/
+trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
 ```
 File utama:
 - `best_model.keras` / `best_model.pt`
 - `final_model.keras` / `final_model.pt`
 - `class_names.json`
 
-## 8. Menambah Komponen Baru
+## 9. Tampilan Dashboard
+1. Tab `Dataset`:
+   - ringkasan dataset original,
+   - ringkasan split train/testing/validation.
+2. Tab `Training Report`:
+   - `Explorer`: telusur bertingkat dataset -> augmentasi -> method -> model -> run,
+   - `Perbandingan`: antar method, antar model, antar augmentasi, dan ranking val accuracy.
+3. Tab `Prediksi`:
+   - pilih kombinasi dataset/augmentasi/method,
+   - bandingkan prediksi beberapa model lintas run.
+
+## 10. Menambah Komponen Baru
 
 ### A. Menambah Dataset
 1. Tambah entry di `configs/datasets.yaml`.
-2. Jalankan check dan split.
+2. Tambahkan `augmentation_options` bila perlu.
+3. Jalankan check dan split.
 
 ### B. Menambah Model
 1. Buat script model worker.
@@ -123,7 +163,12 @@ File utama:
 1. Tambah method di `configs/training_methods.yaml`.
 2. Isi `description` dan `arg_overrides`.
 
-## 9. Catatan Operasional
+### D. Menambah Opsi Augmentasi
+1. Tambah entry di `configs/augmentations.yaml`.
+2. Aktifkan di `augmentation_options` dataset terkait.
+
+## 11. Catatan Operasional
 1. Orkestrasi training utama ada di `training/train.py`.
 2. Dashboard Streamlit difokuskan sebagai pembaca report/model, bukan pusat logic training.
-3. Jika split dijalankan ulang, isi folder split lama akan ditimpa dengan hasil split terbaru.
+3. Jika split dijalankan ulang, isi folder split lama akan ditimpa hasil split terbaru.
+4. Jika kombinasi eksperimen sangat banyak, jalankan batch bertahap agar mudah dianalisis.

@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from src.datasets.registry import DatasetRegistry
 from src.models.registry import ModelRegistry
+from src.training.augmentations import TrainingAugmentationRegistry
 from src.training.strategies import TrainingMethodRegistry
 from src.utils.paths import PROJECT_ROOT
 from src.utils.runtime import build_runtime_env, get_runtime_python, get_venv_python_path
@@ -115,6 +116,51 @@ def ask_optional_int(prompt: str) -> Optional[int]:
         return None
 
 
+def ask_csv_or_all(prompt: str, options: List[str], default: str = "all") -> str:
+    print("\nOpsi tersedia:")
+    for idx, option in enumerate(options, start=1):
+        print(f"{idx}. {option}")
+    print("Ketik 'all' untuk semua opsi.")
+    print("Bisa juga pilih beberapa sekaligus, contoh: 1,3 atau mobilenetv2,resnet50")
+
+    raw = input(f"{prompt} [{default}]: ").strip()
+    if not raw:
+        return default
+
+    normalized = raw.lower()
+    if normalized in {"all", "*"}:
+        return "all"
+
+    selected: List[str] = []
+    for token in [item.strip() for item in raw.split(",") if item.strip()]:
+        if token.isdigit():
+            index = int(token)
+            if 1 <= index <= len(options):
+                selected.append(options[index - 1])
+                continue
+            print(f"Index {index} di luar rentang, diabaikan.")
+            continue
+
+        if token in options:
+            selected.append(token)
+            continue
+
+        print(f"Opsi '{token}' tidak dikenal, diabaikan.")
+
+    if not selected:
+        print("Tidak ada opsi valid, gunakan default.")
+        return default
+
+    deduped: List[str] = []
+    seen = set()
+    for item in selected:
+        if item in seen:
+            continue
+        deduped.append(item)
+        seen.add(item)
+    return ",".join(deduped)
+
+
 def ask_preprocessing_mode() -> str:
     options = [
         "augment (gunakan augmentasi on-the-fly)",
@@ -151,10 +197,14 @@ def build_train_command(
     split_first: bool,
     augment_info: bool,
     preprocessing_mode: str,
+    augmentations: Optional[str] = None,
 ) -> List[str]:
     train_script = _resolve_script("train.py")
     command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
-    command.extend(["--preprocessing-mode", preprocessing_mode])
+    if augmentations:
+        command.extend(["--augmentations", augmentations])
+    else:
+        command.extend(["--preprocessing-mode", preprocessing_mode])
 
     if method_id:
         command.extend(["--method", method_id])
@@ -228,6 +278,7 @@ def print_menu() -> None:
     print("7. Training semua model + semua method")
     print("8. Pipeline penuh (check -> split -> augment -> train all models)")
     print("9. Jalankan dashboard Streamlit")
+    print("10. Workflow training fleksibel (multi dataset/augmentasi/method/model)")
     print("0. Keluar")
 
 
@@ -236,9 +287,11 @@ def main() -> None:
         dataset_registry = DatasetRegistry()
         model_registry = ModelRegistry()
         method_registry = TrainingMethodRegistry()
+        augmentation_registry = TrainingAugmentationRegistry()
 
         model_ids = model_registry.list_model_ids(enabled_only=True)
         method_ids = method_registry.list_method_ids()
+        augmentation_ids = augmentation_registry.list_augmentation_ids()
 
         print_menu()
         choice = input("Pilih aksi: ").strip()
@@ -251,8 +304,11 @@ def main() -> None:
             install_environment()
             continue
 
-        selected_dataset = ask_dataset_target(dataset_registry)
-        target_datasets = resolve_dataset_targets(dataset_registry, selected_dataset)
+        selected_dataset = ""
+        target_datasets: List[str] = []
+        if choice in {"2", "3", "4", "5", "6", "7", "8"}:
+            selected_dataset = ask_dataset_target(dataset_registry)
+            target_datasets = resolve_dataset_targets(dataset_registry, selected_dataset)
 
         if choice == "2":
             for dataset_id in target_datasets:
@@ -327,6 +383,40 @@ def main() -> None:
             run_command(command)
         elif choice == "9":
             run_streamlit_dashboard()
+        elif choice == "10":
+            dataset_arg = ask_csv_or_all(
+                "Pilih dataset target",
+                dataset_registry.list_dataset_ids(),
+                default=dataset_registry.default_dataset,
+            )
+            augmentations_arg = ask_csv_or_all(
+                "Pilih augmentasi",
+                augmentation_ids,
+                default="all",
+            )
+            methods_arg = ask_csv_or_all(
+                "Pilih method training",
+                method_ids,
+                default=method_registry.default_method,
+            )
+            models_arg = ask_csv_or_all(
+                "Pilih model",
+                model_ids,
+                default="all",
+            )
+
+            command = build_train_command(
+                dataset_id=dataset_arg,
+                models=models_arg,
+                method_id=methods_arg,
+                all_methods=False,
+                check_first=ask_yes_no("Jalankan dataset check dulu?", False),
+                split_first=ask_yes_no("Jalankan split dataset dulu?", False),
+                augment_info=ask_yes_no("Tampilkan info augmentasi sebelum training?", False),
+                preprocessing_mode="augment",
+                augmentations=augmentations_arg,
+            )
+            run_command(command)
         else:
             print("Pilihan tidak dikenali. Coba lagi.")
 

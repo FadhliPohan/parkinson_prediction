@@ -328,3 +328,65 @@ Menyelaraskan pipeline agar benar-benar dinamis sesuai kebutuhan user:
 ### Next step
 1. Jika nanti dibutuhkan lagi, `parkinson_multiclass` bisa dikembalikan sebagai dataset opsional terpisah di config.
 2. Tambahkan unit/integration test kecil untuk validasi mode `--dataset all` jika project ingin menambah coverage test otomatis.
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 8
+
+### Tujuan sesi
+Membuat dokumentasi pipeline eksekusi yang lengkap dan mudah dipahami, termasuk penjelasan menyeluruh untuk Pipeline 8.
+
+### Aktivitas yang sudah dilakukan
+1. Membaca ulang flow aktual di `main.py` dan `training/train.py`.
+2. Membaca script pendukung pipeline:
+   - `training/1.check_dataset.py`
+   - `training/2.split_data_testing.py`
+   - `training/3.augmentasi.py`
+3. Membaca konfigurasi aktif dataset, model, method, dan default training.
+4. Menyusun dokumen baru `documentation/pipeline.md` berisi:
+   - peta pipeline 1-9,
+   - tujuan, aktivitas, output, dan catatan tiap pipeline,
+   - mapping menu ke command backend,
+   - contoh skenario penggunaan,
+   - troubleshooting singkat,
+   - bedah lengkap Pipeline 8 (input, command, loop runtime, output, perilaku error, estimasi workload).
+
+### Keputusan
+1. Dokumentasi pipeline dipisah ke file khusus `documentation/pipeline.md` agar fokus operasional tidak bercampur dengan dokumen arsitektur.
+2. Pipeline 8 dijelaskan dengan level detail eksekusi nyata agar bisa dipakai sebagai panduan eksperimen end-to-end.
+
+### Next step
+1. Jika diperlukan, tambahkan contoh template eksperimen standar (misalnya baseline ringan, benchmark menengah, benchmark penuh) di dokumen pipeline.
+2. Sinkronkan `documentation/dokumentasi_aplikasi.md` agar menautkan dokumen `pipeline.md` sebagai referensi operasional utama.
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 9
+
+### Tujuan sesi
+Menyelaraskan seluruh dokumentasi dengan implementasi terbaru workflow kombinasi training dan report bertingkat.
+
+### Aktivitas yang sudah dilakukan
+1. Memperbarui `documentation/architecture.md`:
+   - menambah registry augmentasi (`configs/augmentations.yaml`),
+   - menambah modul `src/training/augmentations.py`,
+   - memperbarui alur CLI kombinasi (`--dataset`, `--augmentations`, `--method`, `--models`),
+   - memperbarui struktur artifact ke format bertingkat.
+2. Menyamakan isi `documentation/arsitectur.md` sebagai mirror dari `architecture.md`.
+3. Memperbarui `documentation/dokumentasi_aplikasi.md`:
+   - command CLI terbaru,
+   - output path report/model terbaru,
+   - penjelasan tab report Streamlit (`Explorer` dan `Perbandingan`).
+4. Memperbarui `documentation/pipeline.md`:
+   - peta pipeline 1-10,
+   - detail pipeline 10 workflow fleksibel,
+   - flow runtime `training/train.py` berbasis kombinasi dataset -> augmentasi -> method -> model,
+   - contoh command terbaru.
+5. Memperbarui catatan status implementasi di `documentation/requirements.md` agar mencerminkan struktur artifact terbaru.
+
+### Keputusan
+1. `architecture.md` tetap dijadikan sumber utama dokumentasi arsitektur.
+2. `arsitectur.md` dipertahankan sebagai mirror identik agar kompatibel dengan naming lama.
+3. Dokumentasi operasional dipisah:
+   - `pipeline.md` untuk flow eksekusi,
+   - `dokumentasi_aplikasi.md` untuk panduan penggunaan harian.
+
+### Next step
+1. Jika diperlukan, tambahkan screenshot dashboard terbaru di dokumentasi untuk memperjelas alur Explorer dan Perbandingan.
+2. Tambahkan contoh skenario benchmark bertahap (small/medium/full) di `pipeline.md`.

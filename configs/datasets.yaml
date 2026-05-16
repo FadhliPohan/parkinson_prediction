@@ -17,6 +17,9 @@ datasets:
       train: [224, 224]
       testing: null
       validation: null
+    augmentation_options:
+      - no_augment
+      - augment_on_the_fly
 
   parkinson_mixing:
     description: "Dataset Mixing (multi-kelas dari spiral/zigzag)."
@@ -33,3 +36,6 @@ datasets:
       train: [224, 224]
       testing: null
       validation: null
+    augmentation_options:
+      - no_augment
+      - augment_on_the_fly

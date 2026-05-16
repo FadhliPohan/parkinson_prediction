@@ -1,18 +1,18 @@
-# Arsitektur Aplikasi Parkinson Prediction (Versi Dinamis)
+# Arsitektur Aplikasi Parkinson Prediction (Versi Dinamis v2)
 
 ## 1. Tujuan Arsitektur
-Arsitektur ini dirancang agar pipeline machine learning lebih:
-1. Dinamis untuk pemilihan dataset, model, dan method training.
+Arsitektur ini dirancang agar pipeline machine learning:
+1. Dinamis untuk pemilihan dataset, augmentasi, method training, dan model.
 2. Modular dan mudah dipelihara.
 3. Konsisten untuk artifact training dan report dashboard.
-4. Aman untuk eksperimen karena seluruh run terdokumentasi.
+4. Aman untuk eksperimen karena setiap kombinasi punya jejak run terpisah.
 
 ## 2. Gambaran Umum
 Komponen utama sistem:
 1. `configs/*.yaml` sebagai sumber konfigurasi.
 2. `src/` sebagai backend modular (dataset, model, training, reporting, inference, utils).
-3. `training/train.py` sebagai orchestrator CLI.
-4. `main.py` sebagai menu terminal dinamis.
+3. `training/train.py` sebagai orchestrator CLI kombinatorial.
+4. `main.py` sebagai menu terminal dinamis (pipeline 1-10).
 5. `web/app.py` sebagai dashboard pembaca report/model.
 
 ## 3. Struktur Folder
@@ -20,6 +20,7 @@ Komponen utama sistem:
 parkinson_prediction/
 ├─ configs/
 │  ├─ datasets.yaml
+│  ├─ augmentations.yaml
 │  ├─ models.yaml
 │  ├─ training_methods.yaml
 │  └─ default_training.yaml
@@ -41,6 +42,7 @@ parkinson_prediction/
 │  │  ├─ pytorch_models/
 │  │  └─ yolo_models/
 │  ├─ training/
+│  │  ├─ augmentations.py
 │  │  ├─ cli_args.py
 │  │  ├─ strategies.py
 │  │  ├─ trainer.py
@@ -64,9 +66,10 @@ parkinson_prediction/
 ├─ model/
 │  └─ legacy_or_wrappers/
 ├─ report/
-│  └─ <dataset_name>/<model_name>/<run_id>/
+│  ├─ <dataset>/<augmentasi>/<method>/<model>/<run_id>/
+│  └─ _workflow_runs/
 ├─ trained_models/
-│  └─ <dataset_name>/<model_name>/<run_id>/
+│  └─ <dataset>/<augmentasi>/<method>/<model>/<run_id>/
 ├─ training/
 │  ├─ train.py
 │  ├─ 1.check_dataset.py
@@ -79,51 +82,41 @@ parkinson_prediction/
    ├─ architecture.md
    ├─ arsitectur.md
    ├─ dokumentasi_aplikasi.md
+   ├─ pipeline.md
    ├─ history.md
    └─ requirements.md
 ```
 
 ## 4. Alur Dataset
 1. Dataset dipilih dari `configs/datasets.yaml` melalui `DatasetRegistry`.
-2. Validasi kelas dilakukan oleh `src/datasets/validator.py` (`direct` atau `recursive_leaf`).
-3. `src/datasets/splitter.py` melakukan proses berikut sebelum split:
-   - Cek distribusi kelas pada dataset original.
-   - Jika tidak seimbang, kelas minoritas diaugmentasi rotasi acak kecil (`-20` sampai `+20` derajat).
-   - Jumlah data kelas minoritas dinaikkan sampai sama dengan kelas mayoritas.
-4. Setelah balancing (jika perlu), data di-split ke `train/testing/validation` sesuai rasio config.
+2. Tiap dataset bisa menentukan `augmentation_options` yang diperbolehkan.
+3. Validasi kelas dilakukan oleh `src/datasets/validator.py` (`direct` atau `recursive_leaf`).
+4. `src/datasets/splitter.py` melakukan split dengan balancing kelas minoritas (rotasi kecil) bila perlu.
 5. Hasil split menyimpan metadata ke `dataset/split/<dataset_id>/_metadata/split_manifest.json`.
 
-## 5. Split Manifest (Schema v1.1.0)
-`split_manifest.json` berisi:
-1. Informasi umum: `schema_version`, `seed`, `original_dir`, `split_dir`, `class_mode`.
-2. Rasio split pada `split_ratio`.
-3. Statistik split per kelas pada `split_stats`.
-4. Statistik jumlah gambar augmentasi yang masuk ke tiap split pada `split_generated_stats`.
-5. Ringkasan balancing pada `class_balancing`:
-   - `applied`
-   - `strategy`
-   - `rotation_range_degrees`
-   - `target_per_class`
-   - `before_counts`
-   - `after_counts`
-   - `generated_per_class`
-   - `total_generated`
+## 5. Registry Augmentasi
+1. Augmentasi training terdaftar di `configs/augmentations.yaml`.
+2. Registry dibaca oleh `src/training/augmentations.py`.
+3. Kondisi saat ini:
+   - `no_augment`
+   - `augment_on_the_fly`
+4. `training/train.py` bisa memakai:
+   - `--augmentations no_augment,augment_on_the_fly`
+   - atau kompatibilitas lama `--preprocessing-mode augment|no_augment|both`.
 
 ## 6. Model Registry
 1. Model terdaftar di `configs/models.yaml`.
 2. `src/models/registry.py` memuat metadata model (`framework`, `script_path`, `preprocess_key`, `enabled`).
-3. Menambah model baru cukup:
-   - tambah entry config,
-   - sediakan worker script model.
+3. Menambah model baru cukup tambah config + worker script.
 
 ## 7. Method Registry dan Training Strategy
 1. Method training terdaftar di `configs/training_methods.yaml`.
 2. Parameter default terpusat di `configs/default_training.yaml`.
 3. `src/training/strategies.py` melakukan merge bertingkat:
    - default training,
-   - override dari method,
-   - override dari argumen CLI.
-4. Method yang tersedia saat ini:
+   - override method,
+   - override user (CLI).
+4. Method aktif saat ini:
    - `baseline`
    - `transfer_learning`
    - `transfer_learning_mixed_precision`
@@ -132,20 +125,20 @@ parkinson_prediction/
 ## 8. Alur Training CLI
 1. Entry utama: `python3 training/train.py`.
 2. Opsi penting:
-   - `--dataset` (`parkinson_merder`, `parkinson_mixing`, atau `all`)
-   - `--models`
-   - `--method` atau `--all-methods`
-   - `--preprocessing-mode {augment,no_augment,both}`
-   - `--check-first`
-   - `--split-first`
-   - `--augment-info`
-3. Saat `--split-first` aktif, pipeline otomatis menjalankan split + balancing sebelum training.
-4. Training didispatch ke runner sesuai framework melalui `src/training/trainer.py`.
+   - `--dataset` (single, multi CSV, atau `all`)
+   - `--augmentations` (single, multi CSV, atau `all`)
+   - `--method` (single, multi CSV, atau `all`) atau `--all-methods`
+   - `--models` (single, multi CSV, atau `all`)
+   - `--check-first`, `--split-first`, `--augment-info`
+3. Orchestrator mengeksekusi kombinasi terpisah dengan urutan:
+   - `dataset -> augmentasi -> method -> model`.
+4. Setiap kombinasi diberi `experiment_id` unik.
+5. Training didispatch ke runner framework melalui `src/training/trainer.py`.
 
 ## 9. Artifact Report dan Model
-1. Report disimpan ke `report/<dataset>/<model>/<run_id>/`.
-2. Model disimpan ke `trained_models/<dataset>/<model>/<run_id>/`.
-3. File report utama (schema `2.0.0` dari `src/reporting/schemas.py`):
+1. Report disimpan ke `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
+2. Model disimpan ke `trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
+3. File report utama:
    - `run_manifest.json`
    - `evaluation_metrics.json`
    - `evaluation_metrics.csv`
@@ -155,29 +148,32 @@ parkinson_prediction/
    - `split_distribution.csv`
    - visual `.png`
    - `summary.txt`
+4. Ringkasan batch workflow disimpan di:
+   - `report/_workflow_runs/workflow_summary_<timestamp>.json`
+   - `report/_workflow_runs/workflow_summary_<timestamp>.csv`
 
 ## 10. Alur Dashboard Streamlit
 1. Dashboard berjalan di `web/app.py`.
-2. Streamlit membaca report dan artifact model dari struktur berbasis dataset.
-3. Dashboard fokus ke:
-   - ringkasan dataset,
-   - daftar eksperimen/run,
-   - visualisasi metrik,
-   - inferensi/prediksi model.
+2. Sumber data utama adalah report (`run_manifest.json` + metrics).
+3. Report dibaca secara indexed oleh `build_experiment_index()`.
+4. Tampilan report dipisah:
+   - tab `Explorer` (dataset -> augmentasi -> method -> model -> run)
+   - tab `Perbandingan` (antar method, model, augmentasi, ranking val accuracy).
+5. Tab prediksi memuat model dari `model_dir` yang direkam di manifest.
 
 ## 11. Menambah Dataset Baru
-1. Tambahkan entry di `configs/datasets.yaml`.
+1. Tambahkan entry dataset di `configs/datasets.yaml`.
 2. Isi minimal: `original_dir`, `split_dir`, `class_mode`, `split`, `seed`.
-3. Jalankan:
+3. Tambahkan `augmentation_options` jika ingin membatasi opsi augmentasi per dataset.
+4. Jalankan:
 ```bash
 python3 training/1.check_dataset.py --dataset <dataset_id>
 python3 training/2.split_data_testing.py --dataset <dataset_id>
 ```
 
 ## 12. Menambah Model Baru
-1. Tambah worker script model (disarankan di `model/legacy_or_wrappers/` atau struktur yang disepakati).
-2. Tambah entry di `configs/models.yaml`.
-3. Pastikan field utama terisi:
+1. Tambah worker script model (disarankan di `model/legacy_or_wrappers/`).
+2. Tambah entry di `configs/models.yaml`:
    - `display_name`
    - `script_path`
    - `framework`
@@ -185,24 +181,37 @@ python3 training/2.split_data_testing.py --dataset <dataset_id>
    - `enabled`
 
 ## 13. Menambah Method Training Baru
-1. Tambah method baru di `configs/training_methods.yaml`.
+1. Tambah method di `configs/training_methods.yaml`.
 2. Isi `description` dan `arg_overrides`.
-3. Method otomatis tersedia pada CLI dan menu terminal.
+3. Method langsung bisa dipakai via CLI dan menu terminal.
 
-## 14. Menjalankan Sistem
+## 14. Menambah Opsi Augmentasi Baru
+1. Tambahkan entry augmentasi di `configs/augmentations.yaml`.
+2. Pastikan field tersedia:
+   - `label`
+   - `description`
+   - `disable_augmentation`
+3. Tambahkan `augmentation_options` pada dataset terkait jika ingin diaktifkan untuk dataset tertentu saja.
+
+## 15. Menjalankan Sistem
 1. Menu terminal:
 ```bash
 python3 main.py
 ```
-2. Training langsung via CLI:
+2. CLI fleksibel (contoh):
 ```bash
-python3 training/train.py --dataset all --models all --all-methods --preprocessing-mode both --split-first
+python3 training/train.py \
+  --dataset all \
+  --augmentations all \
+  --method all \
+  --models resnet50,mobilenetv2,yolov8 \
+  --split-first
 ```
 3. Dashboard:
 ```bash
 streamlit run web/app.py
 ```
 
-## 15. Catatan Sinkronisasi
-1. `documentation/architecture.md` adalah sumber utama dokumentasi arsitektur.
-2. `documentation/arsitectur.md` dipertahankan sebagai mirror agar kompatibel dengan kebutuhan project sebelumnya.
+## 16. Catatan Sinkronisasi
+1. `documentation/architecture.md` adalah sumber utama arsitektur.
+2. `documentation/arsitectur.md` adalah mirror isi agar kompatibel dengan penamaan lama.

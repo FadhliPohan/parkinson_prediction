@@ -5,10 +5,13 @@
   - `documentation/arsitectur.md`
   - `documentation/dokumentasi_aplikasi.md`
 - Fitur terbaru yang sudah aktif di pipeline:
-  - Registry dataset/model/method dinamis.
+  - Registry dataset/model/method/augmentasi dinamis.
   - Split dataset otomatis dengan balancing kelas sebelum split.
   - Balancing kelas menggunakan augmentasi rotasi kecil `-20` s/d `+20` derajat untuk kelas minoritas.
-  - Report dan artifact training berbasis struktur `report/<dataset>/<model>/<run_id>`.
+  - Eksekusi kombinasi eksperimen terpisah dengan urutan `dataset -> augmentasi -> method -> model`.
+  - Setiap kombinasi memiliki `experiment_id` unik.
+  - Report dan artifact training berbasis struktur `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>`.
+  - Dashboard report bertingkat (Explorer + Perbandingan) berbasis indeks manifest.
 
 Kamu adalah Senior Software Architect, Machine Learning Engineer, dan Web Application Engineer yang ahli dalam Python, TensorFlow/Keras, PyTorch, Ultralytics YOLO, Streamlit, struktur project ML, pipeline training, reporting, dan dokumentasi teknis.
 
