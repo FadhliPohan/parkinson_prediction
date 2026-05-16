@@ -11,6 +11,8 @@
   - Eksekusi kombinasi eksperimen terpisah dengan urutan `dataset -> augmentasi -> method -> model`.
   - Setiap kombinasi memiliki `experiment_id` unik.
   - Validasi run existing: sistem bisa `ask/retrain/skip` saat kombinasi sudah pernah ditraining.
+  - Validasi split existing: sistem bisa `ask/resplit/skip` saat folder split sudah ada.
+  - Validasi balance split otomatis sebelum training.
   - Report dan artifact training berbasis struktur `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>`.
   - Dashboard report bertingkat (Explorer + Perbandingan) berbasis indeks manifest.
 

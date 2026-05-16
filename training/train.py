@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 from datetime import datetime
@@ -13,9 +14,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.registry import DatasetConfig, DatasetRegistry
-from src.datasets.splitter import split_dataset
+from src.datasets.splitter import split_dataset, validate_balanced_split_manifest
 from src.datasets.transforms import print_augmentation_summary
-from src.datasets.validator import discover_class_directories
+from src.datasets.validator import discover_class_directories, list_image_files
 from src.models.registry import ModelConfig, ModelRegistry
 from src.reporting.report_reader import build_experiment_index
 from src.training.augmentations import TrainingAugmentation, TrainingAugmentationRegistry
@@ -25,6 +26,7 @@ from src.utils.paths import REPORT_ROOT, TRAINED_MODELS_ROOT
 
 
 ON_EXISTING_CHOICES = ("ask", "retrain", "skip")
+ON_EXISTING_SPLIT_CHOICES = ("ask", "resplit", "skip")
 
 
 def _sanitize_token(value: str) -> str:
@@ -138,6 +140,90 @@ def _run_augment_info(split_dir: Path) -> int:
     except Exception as exc:
         print("Gagal menampilkan augmentasi:", exc)
         return 1
+
+
+def _split_manifest_path(split_dir: Path) -> Path:
+    return split_dir / "_metadata" / "split_manifest.json"
+
+
+def _load_split_manifest(split_dir: Path) -> Optional[Dict[str, Any]]:
+    manifest_path = _split_manifest_path(split_dir)
+    if not manifest_path.exists():
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        if isinstance(payload, dict):
+            return payload
+        return None
+    except Exception:
+        return None
+
+
+def _split_dir_has_required_structure(split_dir: Path, extensions: List[str]) -> bool:
+    required_splits = ["train", "testing", "validation"]
+    for split_name in required_splits:
+        split_path = split_dir / split_name
+        if not split_path.exists() or not split_path.is_dir():
+            return False
+
+        class_dirs = [path for path in split_path.iterdir() if path.is_dir()]
+        if not class_dirs:
+            return False
+
+        has_images = any(list_image_files(class_dir, extensions) for class_dir in class_dirs)
+        if not has_images:
+            return False
+    return True
+
+
+def _ask_resplit_for_dataset(dataset_id: str, split_dir: Path) -> bool:
+    prompt = (
+        f"\nFolder split untuk dataset '{dataset_id}' sudah ada di:\n"
+        f"{split_dir}\n"
+        "Perlu dilakukan split ulang? [y/N]: "
+    )
+    answer = input(prompt).strip().lower()
+    return answer in {"y", "yes"}
+
+
+def _should_run_split(dataset_cfg: DatasetConfig, on_existing_split: str) -> bool:
+    split_dir = dataset_cfg.split_path
+    if not split_dir.exists():
+        return True
+
+    if on_existing_split == "resplit":
+        print("[INFO] `--on-existing-split resplit` aktif. Split akan dijalankan ulang.")
+        return True
+
+    if on_existing_split == "skip":
+        print("[INFO] `--on-existing-split skip` aktif. Split lama akan digunakan.")
+        return False
+
+    if not sys.stdin.isatty():
+        print(
+            "[INFO] Split folder sudah ada, tetapi sesi non-interaktif tidak bisa bertanya. "
+            "Split lama akan digunakan. Gunakan `--on-existing-split resplit` untuk memaksa split ulang."
+        )
+        return False
+
+    return _ask_resplit_for_dataset(dataset_cfg.dataset_id, split_dir)
+
+
+def _assert_split_balance(split_manifest: Dict[str, Any], source_label: str) -> None:
+    validation = split_manifest.get("balance_validation")
+    if not isinstance(validation, dict):
+        validation = validate_balanced_split_manifest(split_manifest)
+
+    if not validation.get("is_balanced", False):
+        raise RuntimeError(
+            "Split {} tidak seimbang antar kelas. "
+            "Hentikan training dan periksa dataset/split manifest.".format(source_label)
+        )
+
+    print(
+        "[VALIDASI] Split {} seimbang: after_counts/train/testing/validation balanced.".format(source_label)
+    )
 
 
 def _collect_user_overrides(args: argparse.Namespace) -> Dict[str, Any]:
@@ -432,6 +518,13 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(ON_EXISTING_CHOICES),
         help="Perilaku jika kombinasi dataset+augmentasi+method+model sudah pernah ditraining: ask, retrain, atau skip.",
     )
+    parser.add_argument(
+        "--on-existing-split",
+        type=str,
+        default="ask",
+        choices=list(ON_EXISTING_SPLIT_CHOICES),
+        help="Perilaku jika folder split dataset sudah ada: ask, resplit, atau skip.",
+    )
 
     parser.add_argument("--image-size", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -523,17 +616,35 @@ def main() -> None:
             )
 
         if args.split_first:
-            print("\n=== Split Dataset ===")
-            split_manifest = split_dataset(
-                original_dir=dataset_cfg.original_path,
-                split_dir=dataset_cfg.split_path,
-                class_mode=dataset_cfg.class_mode,
-                extensions=dataset_cfg.valid_extensions,
-                split_cfg=dataset_cfg.split,
-                resize_cfg=dataset_cfg.resize,
-                seed=int(user_overrides.get("seed", dataset_cfg.seed)),
-            )
-            print("Split selesai. Manifest:", dataset_cfg.split_path / "_metadata" / "split_manifest.json")
+            should_resplit = _should_run_split(dataset_cfg=dataset_cfg, on_existing_split=args.on_existing_split)
+            if should_resplit:
+                print("\n=== Split Dataset ===")
+                split_manifest = split_dataset(
+                    original_dir=dataset_cfg.original_path,
+                    split_dir=dataset_cfg.split_path,
+                    class_mode=dataset_cfg.class_mode,
+                    extensions=dataset_cfg.valid_extensions,
+                    split_cfg=dataset_cfg.split,
+                    resize_cfg=dataset_cfg.resize,
+                    seed=int(user_overrides.get("seed", dataset_cfg.seed)),
+                )
+                source_label = "baru"
+            else:
+                print("\n=== Gunakan Split Existing ===")
+                if not _split_dir_has_required_structure(dataset_cfg.split_path, dataset_cfg.valid_extensions):
+                    raise RuntimeError(
+                        "Folder split existing tidak valid/kurang lengkap. "
+                        "Jalankan split ulang (`--on-existing-split resplit`)."
+                    )
+                split_manifest = _load_split_manifest(dataset_cfg.split_path)
+                if split_manifest is None:
+                    raise RuntimeError(
+                        "split_manifest.json tidak ditemukan pada split existing. "
+                        "Jalankan split ulang (`--on-existing-split resplit`)."
+                    )
+                source_label = "existing"
+
+            print("Split manifest:", dataset_cfg.split_path / "_metadata" / "split_manifest.json")
             split_stats = split_manifest.get("split_stats", {})
             for split_name in ["train", "testing", "validation"]:
                 total = sum(int(v) for v in split_stats.get(split_name, {}).values())
@@ -543,6 +654,22 @@ def main() -> None:
                 print("Balancing  : aktif, total augmentasi =", balancing_info.get("total_generated", 0))
             else:
                 print("Balancing  : tidak perlu (kelas sudah seimbang)")
+            _assert_split_balance(split_manifest=split_manifest, source_label=source_label)
+        else:
+            if not _split_dir_has_required_structure(dataset_cfg.split_path, dataset_cfg.valid_extensions):
+                raise RuntimeError(
+                    "Folder split dataset tidak valid/kurang lengkap. "
+                    "Gunakan `--split-first` untuk membuat split yang siap training."
+                )
+            existing_manifest = _load_split_manifest(dataset_cfg.split_path)
+            if existing_manifest is not None:
+                _assert_split_balance(split_manifest=existing_manifest, source_label="existing")
+            else:
+                print(
+                    "[INFO] split_manifest.json belum tersedia. "
+                    "Validasi balance split dilewati. "
+                    "Gunakan `--split-first` agar split tervalidasi otomatis."
+                )
 
         if args.augment_info:
             rc = _run_augment_info(dataset_cfg.split_path)

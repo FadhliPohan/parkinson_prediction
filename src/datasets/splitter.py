@@ -173,6 +173,51 @@ def _compute_split_indices(total_count: int, train_ratio: float, test_ratio: flo
     return train_count, test_count
 
 
+def _is_uniform_count_map(count_map: Dict[str, object]) -> bool:
+    if not count_map:
+        return False
+    values = [int(value) for value in count_map.values()]
+    return len(set(values)) == 1
+
+
+def validate_balanced_split_manifest(manifest: Dict[str, object]) -> Dict[str, object]:
+    balancing = manifest.get("class_balancing", {})
+    split_stats = manifest.get("split_stats", {})
+
+    if not isinstance(balancing, dict):
+        balancing = {}
+    if not isinstance(split_stats, dict):
+        split_stats = {}
+
+    after_counts = balancing.get("after_counts", {})
+    if not isinstance(after_counts, dict):
+        after_counts = {}
+
+    train_map = split_stats.get("train", {})
+    test_map = split_stats.get("testing", {})
+    validation_map = split_stats.get("validation", {})
+    if not isinstance(train_map, dict):
+        train_map = {}
+    if not isinstance(test_map, dict):
+        test_map = {}
+    if not isinstance(validation_map, dict):
+        validation_map = {}
+
+    validation_result = {
+        "after_counts_balanced": _is_uniform_count_map(after_counts),
+        "train_balanced": _is_uniform_count_map(train_map),
+        "testing_balanced": _is_uniform_count_map(test_map),
+        "validation_balanced": _is_uniform_count_map(validation_map),
+    }
+    validation_result["is_balanced"] = bool(
+        validation_result["after_counts_balanced"]
+        and validation_result["train_balanced"]
+        and validation_result["testing_balanced"]
+        and validation_result["validation_balanced"]
+    )
+    return validation_result
+
+
 def split_dataset(
     original_dir: Path,
     split_dir: Path,
@@ -295,6 +340,13 @@ def split_dataset(
         "split_generated_stats": split_augmented_stats,
         "class_balancing": balancing_manifest,
     }
+    balance_validation = validate_balanced_split_manifest(manifest)
+    manifest["balance_validation"] = balance_validation
+    if not balance_validation.get("is_balanced", False):
+        raise RuntimeError(
+            "Hasil split tidak seimbang. "
+            "Periksa konfigurasi split/kelas pada dataset source sebelum training."
+        )
 
     manifest_path = metadata_dir / "split_manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as fh:

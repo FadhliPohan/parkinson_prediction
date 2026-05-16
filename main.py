@@ -181,6 +181,16 @@ def ask_on_existing_mode() -> str:
     return selected.split(" ", 1)[0].strip()
 
 
+def ask_on_existing_split_mode() -> str:
+    options = [
+        "ask (tanya jika folder split sudah ada)",
+        "resplit (langsung split ulang)",
+        "skip (pakai split lama tanpa split ulang)",
+    ]
+    selected = ask_choice("Perilaku jika folder split sudah ada", options, default_index=0)
+    return selected.split(" ", 1)[0].strip()
+
+
 def ask_dataset_target(dataset_registry: DatasetRegistry) -> str:
     dataset_ids = dataset_registry.list_dataset_ids()
     option_all = "all (jalankan berurutan semua dataset)"
@@ -209,6 +219,7 @@ def build_train_command(
     preprocessing_mode: str,
     augmentations: Optional[str] = None,
     on_existing: str = "ask",
+    on_existing_split: str = "ask",
 ) -> List[str]:
     train_script = _resolve_script("train.py")
     command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
@@ -225,6 +236,7 @@ def build_train_command(
         command.append("--check-first")
     if split_first:
         command.append("--split-first")
+        command.extend(["--on-existing-split", on_existing_split])
     if augment_info:
         command.append("--augment-info")
     command.extend(["--on-existing", on_existing])
@@ -255,9 +267,16 @@ def run_check_dataset(dataset_id: str) -> int:
     return run_command(command)
 
 
-def run_split_dataset(dataset_id: str) -> int:
+def run_split_dataset(dataset_id: str, on_existing_split: str = "ask") -> int:
     script = _resolve_script("2.split_data_testing.py")
-    command = [str(get_runtime_python()), str(script), "--dataset", dataset_id]
+    command = [
+        str(get_runtime_python()),
+        str(script),
+        "--dataset",
+        dataset_id,
+        "--on-existing-split",
+        on_existing_split,
+    ]
     return run_command(command)
 
 
@@ -326,8 +345,9 @@ def main() -> None:
             for dataset_id in target_datasets:
                 run_check_dataset(dataset_id)
         elif choice == "3":
+            on_existing_split_mode = ask_on_existing_split_mode()
             for dataset_id in target_datasets:
-                run_split_dataset(dataset_id)
+                run_split_dataset(dataset_id, on_existing_split=on_existing_split_mode)
         elif choice == "4":
             for dataset_id in target_datasets:
                 dataset_cfg = dataset_registry.get(dataset_id)
@@ -388,6 +408,7 @@ def main() -> None:
                     default_index=method_ids.index(method_registry.default_method),
                 )
 
+            on_existing_split_mode = ask_on_existing_split_mode()
             on_existing_mode = ask_on_existing_mode()
             command = build_train_command(
                 dataset_id=selected_dataset,
@@ -399,6 +420,7 @@ def main() -> None:
                 augment_info=True,
                 preprocessing_mode=ask_preprocessing_mode(),
                 on_existing=on_existing_mode,
+                on_existing_split=on_existing_split_mode,
             )
             run_command(command)
         elif choice == "9":
@@ -425,6 +447,10 @@ def main() -> None:
                 default="all",
             )
             on_existing_mode = ask_on_existing_mode()
+            split_first = ask_yes_no("Jalankan split dataset dulu?", False)
+            on_existing_split_mode = "ask"
+            if split_first:
+                on_existing_split_mode = ask_on_existing_split_mode()
 
             command = build_train_command(
                 dataset_id=dataset_arg,
@@ -432,11 +458,12 @@ def main() -> None:
                 method_id=methods_arg,
                 all_methods=False,
                 check_first=ask_yes_no("Jalankan dataset check dulu?", False),
-                split_first=ask_yes_no("Jalankan split dataset dulu?", False),
+                split_first=split_first,
                 augment_info=ask_yes_no("Tampilkan info augmentasi sebelum training?", False),
                 preprocessing_mode="augment",
                 augmentations=augmentations_arg,
                 on_existing=on_existing_mode,
+                on_existing_split=on_existing_split_mode,
             )
             run_command(command)
         else:

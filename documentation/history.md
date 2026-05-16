@@ -422,3 +422,40 @@ Menambahkan validasi kombinasi training yang sudah pernah dijalankan, lalu memin
 ### Next step
 1. Jika dibutuhkan, tambahkan opsi konfirmasi global sekali per batch (bukan per kombinasi) pada mode `ask`.
 2. Tambahkan badge/status "skipped_existing" di UI report jika ingin terlihat langsung di dashboard.
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 11
+
+### Tujuan sesi
+Memastikan split dataset tervalidasi seimbang sebelum training, dan menambahkan konfirmasi jika folder split sudah ada.
+
+### Aktivitas yang sudah dilakukan
+1. Menambahkan validasi balance split di `src/datasets/splitter.py`:
+   - fungsi `validate_balanced_split_manifest(...)`,
+   - metadata `balance_validation` ditulis ke `split_manifest.json`,
+   - split akan gagal jika hasil tidak seimbang.
+2. Menambahkan kontrol split existing di `training/train.py`:
+   - argumen baru `--on-existing-split {ask,resplit,skip}`,
+   - jika `--split-first` aktif dan split folder sudah ada, user bisa pilih split ulang atau pakai split lama,
+   - split existing wajib valid (struktur split lengkap + manifest tersedia),
+   - validasi balance dijalankan sebelum training.
+3. Menambahkan kontrol split existing di `training/2.split_data_testing.py`:
+   - argumen `--on-existing-split {ask,resplit,skip}`,
+   - perilaku konsisten dengan orchestrator training,
+   - validasi balance tetap dijalankan saat memakai split existing.
+4. Menyesuaikan `main.py`:
+   - prompt baru untuk perilaku split existing (`ask/resplit/skip`),
+   - diteruskan ke pipeline split standalone dan training.
+5. Memperbarui dokumentasi:
+   - `documentation/architecture.md`
+   - `documentation/arsitectur.md`
+   - `documentation/dokumentasi_aplikasi.md`
+   - `documentation/pipeline.md`
+   - `documentation/requirements.md`
+
+### Keputusan
+1. Default split existing dibuat `ask` untuk mencegah split lama tertimpa tanpa konfirmasi.
+2. Training tidak boleh lanjut jika split existing tidak valid atau tidak terverifikasi seimbang.
+
+### Next step
+1. Jika diperlukan, tambahkan mode konfirmasi global sekali per dataset untuk split existing pada batch besar.
+2. Tambahkan tampilan status `balance_validation` di dashboard agar audit split lebih mudah.

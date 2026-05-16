@@ -152,17 +152,24 @@ Setelah command dieksekusi:
    - default training,
    - override method,
    - override user.
-6. Eksekusi loop kombinasi:
+6. Jika `--split-first` aktif dan folder split sudah ada:
+   - `--on-existing-split ask`: tanya user split ulang atau pakai split lama,
+   - `--on-existing-split resplit`: langsung split ulang,
+   - `--on-existing-split skip`: pakai split lama.
+7. Validasi split balance dilakukan sebelum training:
+   - cek balance total per class sesudah balancing,
+   - cek balance per split `train/testing/validation`.
+8. Eksekusi loop kombinasi:
    - dataset loop,
    - augmentasi loop,
    - method loop,
    - model loop.
-7. Cek apakah kombinasi sudah punya run sebelumnya.
-8. Jika run sudah ada:
+9. Cek apakah kombinasi sudah punya run sebelumnya.
+10. Jika run sudah ada:
    - mode `ask` akan meminta konfirmasi retrain,
    - mode `retrain` akan membuat run/model baru dengan timestamp training baru,
    - mode `skip` akan melewati kombinasi lama.
-9. Simpan hasil run per kombinasi.
+11. Simpan hasil run per kombinasi.
 
 ## 7. Contoh Command
 
@@ -183,6 +190,7 @@ python3 training/train.py \
   --method all \
   --models resnet50,mobilenetv2,yolov8 \
   --split-first \
+  --on-existing-split ask \
   --on-existing ask
 ```
 
@@ -205,6 +213,18 @@ python3 training/train.py ... --on-existing retrain
 
 # Lewati kombinasi yang sudah ada
 python3 training/train.py ... --on-existing skip
+```
+
+### E. Mode existing split
+```bash
+# Tanyakan dulu jika folder split sudah ada
+python3 training/train.py ... --split-first --on-existing-split ask
+
+# Paksa split ulang
+python3 training/train.py ... --split-first --on-existing-split resplit
+
+# Pakai split lama tanpa split ulang
+python3 training/train.py ... --split-first --on-existing-split skip
 ```
 
 ## 8. Struktur Output

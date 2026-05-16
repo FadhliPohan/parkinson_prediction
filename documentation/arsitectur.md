@@ -131,6 +131,7 @@ parkinson_prediction/
    - `--models` (single, multi CSV, atau `all`)
    - `--check-first`, `--split-first`, `--augment-info`
    - `--on-existing {ask,retrain,skip}`
+   - `--on-existing-split {ask,resplit,skip}`
 3. Orchestrator mengeksekusi kombinasi terpisah dengan urutan:
    - `dataset -> augmentasi -> method -> model`.
 4. Setiap kombinasi diberi `experiment_id` unik.
@@ -138,7 +139,12 @@ parkinson_prediction/
    - `ask` akan menanyakan konfirmasi training ulang,
    - `retrain` langsung membuat run/model baru dengan timestamp baru,
    - `skip` melewati kombinasi tersebut.
-6. Training didispatch ke runner framework melalui `src/training/trainer.py`.
+6. Jika `--split-first` dipakai, split existing bisa diputuskan:
+   - `ask` (tanya split ulang),
+   - `resplit` (paksa split ulang),
+   - `skip` (pakai split lama).
+7. Validasi balance split dilakukan sebelum training (after_counts + train/testing/validation).
+8. Training didispatch ke runner framework melalui `src/training/trainer.py`.
 
 ## 9. Artifact Report dan Model
 1. Report disimpan ke `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
@@ -211,6 +217,7 @@ python3 training/train.py \
   --method all \
   --models resnet50,mobilenetv2,yolov8 \
   --split-first \
+  --on-existing-split ask \
   --on-existing ask
 ```
 3. Dashboard:

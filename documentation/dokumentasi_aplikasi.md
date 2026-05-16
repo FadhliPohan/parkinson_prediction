@@ -84,6 +84,8 @@ python3 training/train.py \
   --augmentations augment_on_the_fly \
   --models mobilenetv2 \
   --method transfer_learning \
+  --split-first \
+  --on-existing-split ask \
   --on-existing ask
 ```
 
@@ -95,6 +97,7 @@ python3 training/train.py \
   --models all \
   --method all \
   --split-first \
+  --on-existing-split ask \
   --on-existing ask
 ```
 
@@ -104,6 +107,10 @@ Catatan kompatibilitas:
   - `ask`: jika kombinasi sudah pernah training, user ditanya perlu retrain atau tidak.
   - `retrain`: langsung training ulang dan membuat run/model baru dengan timestamp training baru.
   - `skip`: kombinasi lama dilewati.
+- Opsi `--on-existing-split` (saat `--split-first` aktif):
+  - `ask`: jika folder split sudah ada, user ditanya perlu split ulang atau tidak.
+  - `resplit`: langsung split ulang.
+  - `skip`: pakai split lama.
 
 ### E. Dashboard Streamlit
 ```bash
@@ -178,3 +185,4 @@ File utama:
 2. Dashboard Streamlit difokuskan sebagai pembaca report/model, bukan pusat logic training.
 3. Jika split dijalankan ulang, isi folder split lama akan ditimpa hasil split terbaru.
 4. Jika kombinasi eksperimen sangat banyak, jalankan batch bertahap agar mudah dianalisis.
+5. Sebelum training berjalan, pipeline memvalidasi split balance (after_counts + train/testing/validation) agar kelas tetap seimbang.
