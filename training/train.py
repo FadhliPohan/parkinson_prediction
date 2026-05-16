@@ -27,6 +27,7 @@ from src.utils.paths import REPORT_ROOT, TRAINED_MODELS_ROOT
 
 ON_EXISTING_CHOICES = ("ask", "retrain", "skip")
 ON_EXISTING_SPLIT_CHOICES = ("ask", "resplit", "skip")
+METHOD_RUNTIME_OVERRIDE_KEYS = ("epochs", "batch_size", "fine_tune_epochs")
 
 
 def _sanitize_token(value: str) -> str:
@@ -106,6 +107,66 @@ def _resolve_method_ids(args: argparse.Namespace, registry: TrainingMethodRegist
     if unknown:
         raise ValueError("Method tidak ditemukan: {}".format(", ".join(unknown)))
     return requested
+
+
+def _coerce_runtime_override_int(field: str, value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Override '{field}' harus angka bulat") from exc
+
+    if field == "fine_tune_epochs":
+        if parsed < 0:
+            raise ValueError("fine_tune_epochs tidak boleh negatif")
+    else:
+        if parsed <= 0:
+            raise ValueError(f"{field} harus > 0")
+    return parsed
+
+
+def _parse_method_overrides_json(raw_value: Optional[str], method_ids: List[str]) -> Dict[str, Dict[str, int]]:
+    if raw_value is None or not str(raw_value).strip():
+        return {}
+
+    try:
+        payload = json.loads(str(raw_value))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Gagal parse --method-overrides-json: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("--method-overrides-json harus berupa JSON object")
+
+    selected_method_ids = set(method_ids)
+    parsed: Dict[str, Dict[str, int]] = {}
+    for method_id, config in payload.items():
+        method_id_text = str(method_id).strip()
+        if method_id_text not in selected_method_ids:
+            print(
+                "[WARN] Override method '{}' diabaikan karena method tidak termasuk target eksekusi.".format(
+                    method_id_text
+                )
+            )
+            continue
+
+        if not isinstance(config, dict):
+            raise ValueError(f"Override untuk method '{method_id_text}' harus object")
+
+        scoped: Dict[str, int] = {}
+        for key in METHOD_RUNTIME_OVERRIDE_KEYS:
+            if key not in config:
+                continue
+            coerced = _coerce_runtime_override_int(key, config.get(key))
+            if coerced is not None:
+                scoped[key] = coerced
+
+        if scoped:
+            parsed[method_id_text] = scoped
+
+    return parsed
 
 
 def _resolve_augmentation_ids(
@@ -449,6 +510,9 @@ def generate_report(results: List[Dict[str, Any]]) -> Optional[Path]:
         "model",
         "status",
         "run_id",
+        "epochs",
+        "batch_size",
+        "fine_tune_epochs",
         "train_accuracy",
         "val_accuracy",
         "train_loss",
@@ -525,6 +589,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(ON_EXISTING_SPLIT_CHOICES),
         help="Perilaku jika folder split dataset sudah ada: ask, resplit, atau skip.",
     )
+    parser.add_argument(
+        "--method-overrides-json",
+        type=str,
+        default=None,
+        help="JSON override per method, contoh: {\"baseline\":{\"epochs\":10,\"batch_size\":16,\"fine_tune_epochs\":0}}",
+    )
 
     parser.add_argument("--image-size", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -580,12 +650,15 @@ def main() -> None:
     model_cfgs = [model_registry.get(model_id) for model_id in model_ids if model_registry.get(model_id).enabled]
 
     user_overrides = _collect_user_overrides(args)
+    method_runtime_overrides = _parse_method_overrides_json(args.method_overrides_json, method_ids)
 
     print("\n=== Rencana Eksekusi Kombinasi ===")
     print("Dataset    :", ", ".join(dataset_ids))
     print("Augmentasi :", ", ".join(selected_augmentation_ids))
     print("Method     :", ", ".join(method_ids))
     print("Model      :", ", ".join([m.model_id for m in model_cfgs]))
+    if method_runtime_overrides:
+        print("Override per method:", json.dumps(method_runtime_overrides, ensure_ascii=False))
 
     overall_failed: List[str] = []
     workflow_results: List[Dict[str, Any]] = []
@@ -684,15 +757,24 @@ def main() -> None:
                 )
             )
             for method_id in method_ids:
+                scoped_overrides = dict(user_overrides)
+                scoped_overrides.update(method_runtime_overrides.get(method_id, {}))
                 method_cfg, base_training_params = select_training_method(
                     method_registry=method_registry,
                     method_id=method_id,
-                    user_overrides=user_overrides,
+                    user_overrides=scoped_overrides,
                 )
                 training_params = apply_augmentation(base_training_params, augmentation_cfg)
 
                 print("\n--- Method: {} ---".format(method_id))
                 print("Deskripsi:", method_cfg.description)
+                print(
+                    "Runtime config -> epochs={}, batch_size={}, fine_tune_epochs={}".format(
+                        training_params.get("epochs"),
+                        training_params.get("batch_size"),
+                        training_params.get("fine_tune_epochs"),
+                    )
+                )
 
                 for model_cfg in model_cfgs:
                     existing_runs = _find_existing_runs(
@@ -722,6 +804,9 @@ def main() -> None:
                                 "model": model_cfg.model_id,
                                 "status": "skipped_existing",
                                 "run_id": latest_existing.get("run_id"),
+                                "epochs": latest_existing.get("epochs"),
+                                "batch_size": latest_existing.get("batch_size"),
+                                "fine_tune_epochs": latest_existing.get("fine_tune_epochs"),
                                 "train_accuracy": latest_existing.get("train_accuracy"),
                                 "val_accuracy": latest_existing.get("val_accuracy"),
                                 "train_loss": latest_existing.get("train_loss"),
@@ -776,6 +861,9 @@ def main() -> None:
                         "model": model_cfg.model_id,
                         "status": "success" if rc == 0 else "failed",
                         "run_id": eval_result.get("run_id"),
+                        "epochs": training_params.get("epochs"),
+                        "batch_size": training_params.get("batch_size"),
+                        "fine_tune_epochs": training_params.get("fine_tune_epochs"),
                         "train_accuracy": metrics.get("train_accuracy"),
                         "val_accuracy": metrics.get("val_accuracy"),
                         "train_loss": metrics.get("train_loss"),

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.datasets.registry import DatasetRegistry
 from src.models.registry import ModelRegistry
@@ -116,6 +117,49 @@ def ask_optional_int(prompt: str) -> Optional[int]:
         return None
 
 
+def _parse_csv_selection(raw: str, options: List[str]) -> List[str]:
+    normalized = str(raw).strip().lower()
+    if normalized in {"all", "*"}:
+        return list(options)
+    selected = [item.strip() for item in str(raw).split(",") if item.strip()]
+    return [item for item in selected if item in options]
+
+
+def ask_method_runtime_overrides(method_ids: List[str]) -> Dict[str, Dict[str, int]]:
+    if not method_ids:
+        return {}
+
+    print("\n=== Konfigurasi Runtime per Method ===")
+    print("Kosongkan input jika ingin pakai default method.")
+    overrides: Dict[str, Dict[str, int]] = {}
+
+    for method_id in method_ids:
+        print(f"\nMethod: {method_id}")
+        epochs = ask_optional_int("Epoch stage-1")
+        batch_size = ask_optional_int("Batch size")
+        fine_tune_epochs = ask_optional_int("Fine-tune epochs")
+
+        method_override: Dict[str, int] = {}
+        if epochs is not None:
+            method_override["epochs"] = epochs
+        if batch_size is not None:
+            method_override["batch_size"] = batch_size
+        if fine_tune_epochs is not None:
+            method_override["fine_tune_epochs"] = fine_tune_epochs
+
+        if method_override:
+            overrides[method_id] = method_override
+
+    return overrides
+
+
+def ask_runtime_toggles() -> Dict[str, bool]:
+    return {
+        "mixed_precision": ask_yes_no("Aktifkan mixed precision?", False),
+        "disable_cpu_fallback": ask_yes_no("Nonaktifkan fallback CPU?", False),
+    }
+
+
 def ask_csv_or_all(prompt: str, options: List[str], default: str = "all") -> str:
     print("\nOpsi tersedia:")
     for idx, option in enumerate(options, start=1):
@@ -220,6 +264,9 @@ def build_train_command(
     augmentations: Optional[str] = None,
     on_existing: str = "ask",
     on_existing_split: str = "ask",
+    method_overrides: Optional[Dict[str, Dict[str, int]]] = None,
+    mixed_precision: bool = False,
+    disable_cpu_fallback: bool = False,
 ) -> List[str]:
     train_script = _resolve_script("train.py")
     command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
@@ -241,21 +288,13 @@ def build_train_command(
         command.append("--augment-info")
     command.extend(["--on-existing", on_existing])
 
-    epochs = ask_optional_int("Override epoch stage-1")
-    batch_size = ask_optional_int("Override batch size")
-    fine_tune_epochs = ask_optional_int("Override fine-tune epochs")
+    if method_overrides:
+        command.extend(["--method-overrides-json", json.dumps(method_overrides)])
 
-    if epochs is not None:
-        command.extend(["--epochs", str(epochs)])
-    if batch_size is not None:
-        command.extend(["--batch-size", str(batch_size)])
-    if fine_tune_epochs is not None:
-        command.extend(["--fine-tune-epochs", str(fine_tune_epochs)])
-
-    if ask_yes_no("Aktifkan mixed precision?", False):
+    if mixed_precision:
         command.append("--mixed-precision")
 
-    if ask_yes_no("Nonaktifkan fallback CPU?", False):
+    if disable_cpu_fallback:
         command.append("--disable-cpu-fallback")
 
     return command
@@ -356,6 +395,8 @@ def main() -> None:
             selected_model = ask_choice("Pilih model", model_ids)
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
             on_existing_mode = ask_on_existing_mode()
+            method_overrides = ask_method_runtime_overrides([selected_method])
+            runtime_toggles = ask_runtime_toggles()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models=selected_model,
@@ -366,11 +407,16 @@ def main() -> None:
                 augment_info=False,
                 preprocessing_mode=ask_preprocessing_mode(),
                 on_existing=on_existing_mode,
+                method_overrides=method_overrides,
+                mixed_precision=runtime_toggles["mixed_precision"],
+                disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
             )
             run_command(command)
         elif choice == "6":
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
             on_existing_mode = ask_on_existing_mode()
+            method_overrides = ask_method_runtime_overrides([selected_method])
+            runtime_toggles = ask_runtime_toggles()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models="all",
@@ -381,10 +427,15 @@ def main() -> None:
                 augment_info=False,
                 preprocessing_mode=ask_preprocessing_mode(),
                 on_existing=on_existing_mode,
+                method_overrides=method_overrides,
+                mixed_precision=runtime_toggles["mixed_precision"],
+                disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
             )
             run_command(command)
         elif choice == "7":
             on_existing_mode = ask_on_existing_mode()
+            method_overrides = ask_method_runtime_overrides(method_ids)
+            runtime_toggles = ask_runtime_toggles()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models="all",
@@ -395,21 +446,28 @@ def main() -> None:
                 augment_info=False,
                 preprocessing_mode=ask_preprocessing_mode(),
                 on_existing=on_existing_mode,
+                method_overrides=method_overrides,
+                mixed_precision=runtime_toggles["mixed_precision"],
+                disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
             )
             run_command(command)
         elif choice == "8":
             use_all_methods = ask_yes_no("Gunakan semua method training?", True)
             if use_all_methods:
                 method_id = None
+                selected_method_ids = method_ids
             else:
                 method_id = ask_choice(
                     "Pilih method",
                     method_ids,
                     default_index=method_ids.index(method_registry.default_method),
                 )
+                selected_method_ids = [method_id]
 
             on_existing_split_mode = ask_on_existing_split_mode()
             on_existing_mode = ask_on_existing_mode()
+            method_overrides = ask_method_runtime_overrides(selected_method_ids)
+            runtime_toggles = ask_runtime_toggles()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models="all",
@@ -421,6 +479,9 @@ def main() -> None:
                 preprocessing_mode=ask_preprocessing_mode(),
                 on_existing=on_existing_mode,
                 on_existing_split=on_existing_split_mode,
+                method_overrides=method_overrides,
+                mixed_precision=runtime_toggles["mixed_precision"],
+                disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
             )
             run_command(command)
         elif choice == "9":
@@ -446,11 +507,14 @@ def main() -> None:
                 model_ids,
                 default="all",
             )
+            selected_method_ids = _parse_csv_selection(methods_arg, method_ids)
+            method_overrides = ask_method_runtime_overrides(selected_method_ids)
             on_existing_mode = ask_on_existing_mode()
             split_first = ask_yes_no("Jalankan split dataset dulu?", False)
             on_existing_split_mode = "ask"
             if split_first:
                 on_existing_split_mode = ask_on_existing_split_mode()
+            runtime_toggles = ask_runtime_toggles()
 
             command = build_train_command(
                 dataset_id=dataset_arg,
@@ -464,6 +528,9 @@ def main() -> None:
                 augmentations=augmentations_arg,
                 on_existing=on_existing_mode,
                 on_existing_split=on_existing_split_mode,
+                method_overrides=method_overrides,
+                mixed_precision=runtime_toggles["mixed_precision"],
+                disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
             )
             run_command(command)
         else:

@@ -459,3 +459,47 @@ Memastikan split dataset tervalidasi seimbang sebelum training, dan menambahkan 
 ### Next step
 1. Jika diperlukan, tambahkan mode konfirmasi global sekali per dataset untuk split existing pada batch besar.
 2. Tambahkan tampilan status `balance_validation` di dashboard agar audit split lebih mudah.
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 12
+
+### Tujuan sesi
+Menambahkan pengaturan runtime per method di awal training (epoch, batch size, fine-tune epochs), memastikan nilainya terekam, dan menampilkannya di report Streamlit.
+
+### Aktivitas yang sudah dilakukan
+1. Mengupdate `main.py`:
+   - menambahkan prompt konfigurasi runtime per method di awal workflow training:
+     - `Epoch stage-1`
+     - `Batch size`
+     - `Fine-tune epochs`
+   - menambahkan helper parsing method target multi/all,
+   - mengirim konfigurasi per method ke `training/train.py` lewat argumen baru `--method-overrides-json`,
+   - merapikan prompt runtime toggle (`mixed precision`, `disable cpu fallback`) agar tetap satu kali per eksekusi command.
+2. Mengupdate `training/train.py`:
+   - menambahkan parser argumen `--method-overrides-json`,
+   - menambahkan validator/coercer nilai runtime (`epochs`, `batch_size`, `fine_tune_epochs`),
+   - menggabungkan override runtime per method ke parameter training sebelum eksekusi loop model,
+   - menampilkan runtime config aktif per method saat proses berjalan,
+   - menambahkan `epochs`, `batch_size`, `fine_tune_epochs` ke ringkasan workflow (`workflow_summary_*.csv/json`).
+3. Mengupdate `src/reporting/report_reader.py`:
+   - mengekstrak `epochs`, `batch_size`, `fine_tune_epochs` dari `run_manifest.training.parameters`,
+   - menambahkan field tersebut ke record index dan latest summary table.
+4. Mengupdate `web/app.py`:
+   - menampilkan metric konfigurasi runtime (`Epoch Stage-1`, `Batch Size`, `Fine-tune Epochs`) pada detail run,
+   - menambahkan kolom runtime config pada ranking perbandingan.
+5. Mengupdate dokumentasi agar sinkron:
+   - `documentation/pipeline.md`
+   - `documentation/architecture.md`
+   - `documentation/arsitectur.md` (mirror)
+   - `documentation/dokumentasi_aplikasi.md`
+   - `documentation/history.md`
+
+### Validasi yang dilakukan
+1. `python3 -m py_compile main.py training/train.py src/reporting/report_reader.py web/app.py` -> sukses.
+2. `python3 training/train.py --help` -> menampilkan argumen baru `--method-overrides-json`.
+
+### Keputusan
+1. Pengaturan `epoch`, `batch`, dan `fine-tune` diposisikan sebagai runtime config per method di awal workflow agar lebih fleksibel dan konsisten antar eksperimen.
+2. Nilai runtime wajib terlihat pada report agar audit eksperimen dan perbandingan hasil lebih informatif.
+
+### Next step
+1. Jika diperlukan, tambahkan filter perbandingan berbasis nilai runtime config (mis. hanya run dengan `batch_size` tertentu) pada dashboard Streamlit.

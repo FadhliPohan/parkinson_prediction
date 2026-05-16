@@ -115,7 +115,8 @@ parkinson_prediction/
 3. `src/training/strategies.py` melakukan merge bertingkat:
    - default training,
    - override method,
-   - override user (CLI).
+   - override user (CLI global),
+   - override runtime per method (`epochs`, `batch_size`, `fine_tune_epochs`) jika diisi user di awal workflow.
 4. Method aktif saat ini:
    - `baseline`
    - `transfer_learning`
@@ -129,6 +130,7 @@ parkinson_prediction/
    - `--augmentations` (single, multi CSV, atau `all`)
    - `--method` (single, multi CSV, atau `all`) atau `--all-methods`
    - `--models` (single, multi CSV, atau `all`)
+   - `--method-overrides-json` (override runtime per method)
    - `--check-first`, `--split-first`, `--augment-info`
    - `--on-existing {ask,retrain,skip}`
    - `--on-existing-split {ask,resplit,skip}`
@@ -145,6 +147,7 @@ parkinson_prediction/
    - `skip` (pakai split lama).
 7. Validasi balance split dilakukan sebelum training (after_counts + train/testing/validation).
 8. Training didispatch ke runner framework melalui `src/training/trainer.py`.
+9. `main.py` menanyakan konfigurasi runtime per method di awal (epoch/batch/fine-tune), lalu meneruskannya ke orchestrator.
 
 ## 9. Artifact Report dan Model
 1. Report disimpan ke `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
@@ -162,6 +165,10 @@ parkinson_prediction/
 4. Ringkasan batch workflow disimpan di:
    - `report/_workflow_runs/workflow_summary_<timestamp>.json`
    - `report/_workflow_runs/workflow_summary_<timestamp>.csv`
+5. Ringkasan workflow juga menyimpan parameter runtime utama per kombinasi:
+   - `epochs`
+   - `batch_size`
+   - `fine_tune_epochs`
 
 ## 10. Alur Dashboard Streamlit
 1. Dashboard berjalan di `web/app.py`.
@@ -170,7 +177,8 @@ parkinson_prediction/
 4. Tampilan report dipisah:
    - tab `Explorer` (dataset -> augmentasi -> method -> model -> run)
    - tab `Perbandingan` (antar method, model, augmentasi, ranking val accuracy).
-5. Tab prediksi memuat model dari `model_dir` yang direkam di manifest.
+5. Detail run menampilkan konfigurasi runtime yang dipakai (`epoch`, `batch`, `fine-tune`) agar eksperimen mudah diaudit.
+6. Tab prediksi memuat model dari `model_dir` yang direkam di manifest.
 
 ## 11. Menambah Dataset Baru
 1. Tambahkan entry dataset di `configs/datasets.yaml`.

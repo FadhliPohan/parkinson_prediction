@@ -69,6 +69,15 @@ def _safe_float(value: object) -> Optional[float]:
         return None
 
 
+def _safe_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
 def _metric_text(value: Optional[float]) -> str:
     if value is None or np.isnan(value):
         return "NaN"
@@ -88,6 +97,9 @@ def _build_record_dataframe(records: List[Dict[str, object]]) -> pd.DataFrame:
                 "run_id": item.get("run_id"),
                 "run_started_at": item.get("run_started_at"),
                 "run_finished_at": item.get("run_finished_at"),
+                "epochs": _safe_int(item.get("epochs")),
+                "batch_size": _safe_int(item.get("batch_size")),
+                "fine_tune_epochs": _safe_int(item.get("fine_tune_epochs")),
                 "train_accuracy": _safe_float(item.get("train_accuracy")),
                 "val_accuracy": _safe_float(item.get("val_accuracy")),
                 "train_loss": _safe_float(item.get("train_loss")),
@@ -186,6 +198,20 @@ def _render_run_detail(record: Dict[str, object]) -> None:
         }
     )
 
+    training = manifest.get("training", {}) if isinstance(manifest, dict) else {}
+    run_params = training.get("parameters", {}) if isinstance(training, dict) else {}
+    if not isinstance(run_params, dict):
+        run_params = {}
+
+    epochs_value = _safe_int(run_params.get("epochs"))
+    batch_size_value = _safe_int(run_params.get("batch_size"))
+    fine_tune_epochs_value = _safe_int(run_params.get("fine_tune_epochs"))
+
+    c_cfg_1, c_cfg_2, c_cfg_3 = st.columns(3)
+    c_cfg_1.metric("Epoch Stage-1", str(epochs_value) if epochs_value is not None else "-")
+    c_cfg_2.metric("Batch Size", str(batch_size_value) if batch_size_value is not None else "-")
+    c_cfg_3.metric("Fine-tune Epochs", str(fine_tune_epochs_value) if fine_tune_epochs_value is not None else "-")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Train Accuracy", _metric_text(_safe_float(record.get("train_accuracy"))))
     c2.metric("Validation Accuracy", _metric_text(_safe_float(record.get("val_accuracy"))))
@@ -210,8 +236,7 @@ def _render_run_detail(record: Dict[str, object]) -> None:
     )
 
     with st.expander("Parameter Penting"):
-        training = manifest.get("training", {}) if isinstance(manifest, dict) else {}
-        st.json(training.get("parameters", {}))
+        st.json(run_params)
 
     with st.expander("Run Manifest Lengkap"):
         st.json(manifest)
@@ -355,6 +380,9 @@ def _render_comparison_section(records: List[Dict[str, object]]) -> None:
                     "method",
                     "model",
                     "run_id",
+                    "epochs",
+                    "batch_size",
+                    "fine_tune_epochs",
                     "val_accuracy",
                     "test_accuracy",
                     "f1_score",

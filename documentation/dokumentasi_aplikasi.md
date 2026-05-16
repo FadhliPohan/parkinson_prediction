@@ -96,6 +96,7 @@ python3 training/train.py \
   --augmentations all \
   --models all \
   --method all \
+  --method-overrides-json '{"baseline":{"epochs":10,"batch_size":16,"fine_tune_epochs":0},"transfer_learning":{"epochs":8,"batch_size":12,"fine_tune_epochs":2}}' \
   --split-first \
   --on-existing-split ask \
   --on-existing ask
@@ -111,6 +112,13 @@ Catatan kompatibilitas:
   - `ask`: jika folder split sudah ada, user ditanya perlu split ulang atau tidak.
   - `resplit`: langsung split ulang.
   - `skip`: pakai split lama.
+- Opsi `--method-overrides-json`:
+  - mengatur runtime config per method (`epochs`, `batch_size`, `fine_tune_epochs`) dalam satu command.
+  - contoh JSON: `{"baseline":{"epochs":10,"batch_size":16,"fine_tune_epochs":0}}`.
+- Jika menjalankan dari menu `main.py`, user akan ditanya di awal untuk setiap method:
+  - `Epoch stage-1`,
+  - `Batch size`,
+  - `Fine-tune epochs`.
 
 ### E. Dashboard Streamlit
 ```bash
@@ -139,6 +147,7 @@ Ringkasan eksekusi workflow:
 report/_workflow_runs/workflow_summary_<timestamp>.json
 report/_workflow_runs/workflow_summary_<timestamp>.csv
 ```
+Ringkasan ini juga memuat konfigurasi runtime utama (`epochs`, `batch_size`, `fine_tune_epochs`) per kombinasi.
 
 ### Model
 ```text
@@ -156,6 +165,7 @@ File utama:
 2. Tab `Training Report`:
    - `Explorer`: telusur bertingkat dataset -> augmentasi -> method -> model -> run,
    - `Perbandingan`: antar method, antar model, antar augmentasi, dan ranking val accuracy.
+   - detail run menampilkan runtime config yang dipakai (`epoch`, `batch`, `fine-tune`).
 3. Tab `Prediksi`:
    - pilih kombinasi dataset/augmentasi/method,
    - bandingkan prediksi beberapa model lintas run.

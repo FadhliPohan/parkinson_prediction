@@ -10,11 +10,13 @@
   - Balancing kelas menggunakan augmentasi rotasi kecil `-20` s/d `+20` derajat untuk kelas minoritas.
   - Eksekusi kombinasi eksperimen terpisah dengan urutan `dataset -> augmentasi -> method -> model`.
   - Setiap kombinasi memiliki `experiment_id` unik.
+  - Pengaturan runtime `epochs`, `batch_size`, dan `fine_tune_epochs` per method di awal workflow.
   - Validasi run existing: sistem bisa `ask/retrain/skip` saat kombinasi sudah pernah ditraining.
   - Validasi split existing: sistem bisa `ask/resplit/skip` saat folder split sudah ada.
   - Validasi balance split otomatis sebelum training.
   - Report dan artifact training berbasis struktur `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>`.
   - Dashboard report bertingkat (Explorer + Perbandingan) berbasis indeks manifest.
+  - Report menampilkan konfigurasi runtime per run agar eksperimen mudah diaudit.
 
 Kamu adalah Senior Software Architect, Machine Learning Engineer, dan Web Application Engineer yang ahli dalam Python, TensorFlow/Keras, PyTorch, Ultralytics YOLO, Streamlit, struktur project ML, pipeline training, reporting, dan dokumentasi teknis.
 

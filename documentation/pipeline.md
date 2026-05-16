@@ -89,8 +89,12 @@ Aktivitas:
 2. Pilih model.
 3. Pilih method.
 4. Pilih preprocessing mode (`augment`, `no_augment`, `both`).
-5. Isi override opsional.
-6. `main.py` membangun command ke `training/train.py`.
+5. Isi konfigurasi runtime method di awal:
+   - `epoch stage-1`,
+   - `batch size`,
+   - `fine-tune epochs`.
+6. Konfigurasi runtime method direkam ke report run (`run_manifest`) dan ringkasan workflow.
+7. `main.py` membangun command ke `training/train.py`.
 
 Output:
 1. Report per kombinasi di `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
@@ -100,22 +104,25 @@ Output:
 Aktivitas:
 1. Pilih dataset.
 2. Pilih satu method.
-3. Jalankan semua model aktif.
-4. Preprocessing mode sesuai pilihan user.
+3. Set konfigurasi runtime method di awal (`epoch`, `batch`, `fine-tune`).
+4. Jalankan semua model aktif.
+5. Preprocessing mode sesuai pilihan user.
 
 ### Pipeline 7 - Training semua model + semua method
 Aktivitas:
 1. Pilih dataset.
 2. Jalankan semua model.
 3. Jalankan semua method.
-4. Preprocessing mode sesuai pilihan user.
+4. Untuk tiap method, set konfigurasi runtime di awal (`epoch`, `batch`, `fine-tune`).
+5. Preprocessing mode sesuai pilihan user.
 
 ### Pipeline 8 - Pipeline penuh
 Aktivitas:
 1. Check dataset.
 2. Split dataset.
 3. Tampilkan info augmentasi.
-4. Training semua model dengan method sesuai pilihan.
+4. Set konfigurasi runtime per method di awal (`epoch`, `batch`, `fine-tune`).
+5. Training semua model dengan method sesuai pilihan.
 
 ### Pipeline 9 - Jalankan dashboard Streamlit
 Aktivitas:
@@ -128,9 +135,13 @@ Aktivitas:
 2. User memilih augmentasi (single/multi/all).
 3. User memilih method (single/multi/all).
 4. User memilih model (single/multi/all).
-5. Orchestrator mengeksekusi kombinasi secara independen.
-6. Setiap kombinasi punya `experiment_id` unik.
-7. Jika kombinasi sudah pernah ditraining, sistem akan menangani sesuai mode `on-existing`:
+5. User mengisi konfigurasi runtime untuk tiap method terpilih:
+   - `epoch stage-1`,
+   - `batch size`,
+   - `fine-tune epochs`.
+6. Orchestrator mengeksekusi kombinasi secara independen.
+7. Setiap kombinasi punya `experiment_id` unik.
+8. Jika kombinasi sudah pernah ditraining, sistem akan menangani sesuai mode `on-existing`:
    - `ask`: tanya user apakah perlu training ulang,
    - `retrain`: langsung training ulang,
    - `skip`: lewati kombinasi lama.
@@ -151,7 +162,8 @@ Setelah command dieksekusi:
 5. Merge parameter training:
    - default training,
    - override method,
-   - override user.
+   - override user global,
+   - override runtime per method (jika diisi).
 6. Jika `--split-first` aktif dan folder split sudah ada:
    - `--on-existing-split ask`: tanya user split ulang atau pakai split lama,
    - `--on-existing-split resplit`: langsung split ulang,
@@ -170,6 +182,7 @@ Setelah command dieksekusi:
    - mode `retrain` akan membuat run/model baru dengan timestamp training baru,
    - mode `skip` akan melewati kombinasi lama.
 11. Simpan hasil run per kombinasi.
+12. Ringkasan workflow juga menyimpan `epochs`, `batch_size`, dan `fine_tune_epochs` per kombinasi.
 
 ## 7. Contoh Command
 
@@ -189,6 +202,7 @@ python3 training/train.py \
   --augmentations all \
   --method all \
   --models resnet50,mobilenetv2,yolov8 \
+  --method-overrides-json '{"baseline":{"epochs":10,"batch_size":16,"fine_tune_epochs":0},"full_fine_tuning":{"epochs":12,"batch_size":8,"fine_tune_epochs":8}}' \
   --split-first \
   --on-existing-split ask \
   --on-existing ask
@@ -243,6 +257,7 @@ File penting:
 6. `split_distribution.csv`
 7. visual `.png`
 8. `summary.txt`
+9. Konfigurasi runtime training (`epochs`, `batch_size`, `fine_tune_epochs`) terekam di `run_manifest.json` dan terbaca di dashboard.
 
 ### Model per run
 ```text
@@ -266,6 +281,7 @@ trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
    - antar model,
    - antar augmentasi,
    - ranking model berdasarkan validation accuracy.
+4. Detail run menampilkan konfigurasi runtime (`epoch`, `batch`, `fine-tune`) agar setiap eksperimen mudah diaudit.
 
 ## 11. Troubleshooting Singkat
 1. Error dependency:

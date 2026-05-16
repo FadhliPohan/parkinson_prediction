@@ -51,6 +51,15 @@ def _to_float_or_none(value: Any) -> Optional[float]:
         return None
 
 
+def _to_int_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
 def _build_record_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     metrics = safe_load_json(run_dir / EVALUATION_METRICS_JSON_FILE) or {}
 
@@ -58,6 +67,9 @@ def _build_record_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> Dict
     model = manifest.get("model", {}) if isinstance(manifest, dict) else {}
     training = manifest.get("training", {}) if isinstance(manifest, dict) else {}
     artifacts = manifest.get("artifacts", {}) if isinstance(manifest, dict) else {}
+    params = training.get("parameters", {}) if isinstance(training, dict) else {}
+    if not isinstance(params, dict):
+        params = {}
 
     dataset_name = str(dataset.get("dataset_name", "unknown_dataset"))
     model_name = str(model.get("model_name", run_dir.parent.name))
@@ -81,6 +93,10 @@ def _build_record_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> Dict
         "run_dir": str(run_dir),
         "manifest": manifest,
         "metrics": metrics,
+        "epochs": _to_int_or_none(params.get("epochs")),
+        "batch_size": _to_int_or_none(params.get("batch_size")),
+        "fine_tune_epochs": _to_int_or_none(params.get("fine_tune_epochs")),
+        "training_parameters": params,
         "accuracy": _to_float_or_none(metrics.get("accuracy")),
         "f1_score": _to_float_or_none(metrics.get("f1_score")),
         "roc_auc": _to_float_or_none(metrics.get("roc_auc")),
@@ -253,6 +269,9 @@ def build_latest_summary_table(report_root: Path) -> List[Dict[str, object]]:
                 "method": record.get("method"),
                 "model": record.get("model"),
                 "run_id": record.get("run_id"),
+                "epochs": record.get("epochs"),
+                "batch_size": record.get("batch_size"),
+                "fine_tune_epochs": record.get("fine_tune_epochs"),
                 "train_accuracy": record.get("train_accuracy"),
                 "val_accuracy": record.get("val_accuracy"),
                 "train_loss": record.get("train_loss"),
