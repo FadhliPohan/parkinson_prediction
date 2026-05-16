@@ -24,6 +24,9 @@ from src.training.trainer import run_model_training
 from src.utils.paths import REPORT_ROOT, TRAINED_MODELS_ROOT
 
 
+ON_EXISTING_CHOICES = ("ask", "retrain", "skip")
+
+
 def _sanitize_token(value: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value).strip())
     sanitized = sanitized.strip("-")
@@ -251,6 +254,86 @@ def evaluate_model(
     return filtered_records[0]
 
 
+def _find_existing_runs(
+    report_index: List[Dict[str, Any]],
+    dataset_id: str,
+    augmentation_id: str,
+    method_id: str,
+    model_id: str,
+) -> List[Dict[str, Any]]:
+    return [
+        record
+        for record in report_index
+        if record.get("dataset") == dataset_id
+        and record.get("augmentation") == augmentation_id
+        and record.get("method") == method_id
+        and record.get("model") == model_id
+    ]
+
+
+def _ask_retrain_for_existing_combo(
+    dataset_id: str,
+    augmentation_id: str,
+    method_id: str,
+    model_id: str,
+    latest_run_id: str,
+) -> bool:
+    prompt = (
+        "\nKombinasi sudah pernah ditraining: "
+        f"dataset={dataset_id}, augmentasi={augmentation_id}, method={method_id}, model={model_id}\n"
+        f"Run terbaru: {latest_run_id}\n"
+        "Training ulang akan membuat run/model baru dengan tanggal training baru.\n"
+        "Lanjut training ulang? [y/N]: "
+    )
+    answer = input(prompt).strip().lower()
+    return answer in {"y", "yes"}
+
+
+def _should_run_combo(
+    on_existing: str,
+    existing_runs: List[Dict[str, Any]],
+    dataset_id: str,
+    augmentation_id: str,
+    method_id: str,
+    model_id: str,
+) -> bool:
+    if not existing_runs:
+        return True
+
+    latest_run_id = str(existing_runs[0].get("run_id", "unknown_run"))
+    if on_existing == "retrain":
+        print(
+            "[INFO] Ditemukan run sebelumnya untuk kombinasi ini. "
+            "Lanjut retrain dan buat run baru:",
+            latest_run_id,
+        )
+        return True
+
+    if on_existing == "skip":
+        print(
+            "[SKIP] Kombinasi sudah pernah ditraining dan `--on-existing skip` aktif. "
+            "Run terbaru:",
+            latest_run_id,
+        )
+        return False
+
+    if not sys.stdin.isatty():
+        print(
+            "[SKIP] Kombinasi sudah pernah ditraining, tetapi sesi non-interaktif "
+            "tidak bisa meminta konfirmasi retrain. "
+            "Gunakan `--on-existing retrain` jika ingin memaksa training ulang."
+        )
+        return False
+
+    return _ask_retrain_for_existing_combo(
+        dataset_id=dataset_id,
+        augmentation_id=augmentation_id,
+        method_id=method_id,
+        model_id=model_id,
+        latest_run_id=latest_run_id,
+    )
+
+
 def save_result(results: List[Dict[str, Any]], result: Dict[str, Any]) -> None:
     results.append(result)
 
@@ -342,6 +425,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment-info", action="store_true", help="Cetak info augmentasi train on-the-fly")
 
     parser.add_argument("--stop-on-error", action="store_true", help="Hentikan jika ada model gagal")
+    parser.add_argument(
+        "--on-existing",
+        type=str,
+        default="ask",
+        choices=list(ON_EXISTING_CHOICES),
+        help="Perilaku jika kombinasi dataset+augmentasi+method+model sudah pernah ditraining: ask, retrain, atau skip.",
+    )
 
     parser.add_argument("--image-size", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -406,6 +496,11 @@ def main() -> None:
 
     overall_failed: List[str] = []
     workflow_results: List[Dict[str, Any]] = []
+    report_index = build_experiment_index(REPORT_ROOT)
+    if report_index:
+        print("\n[INFO] Ditemukan {} run historis pada folder report.".format(len(report_index)))
+    else:
+        print("\n[INFO] Belum ada run historis pada folder report.")
 
     for dataset_id in dataset_ids:
         dataset_cfg = load_dataset(dataset_registry, dataset_id)
@@ -473,6 +568,46 @@ def main() -> None:
                 print("Deskripsi:", method_cfg.description)
 
                 for model_cfg in model_cfgs:
+                    existing_runs = _find_existing_runs(
+                        report_index=report_index,
+                        dataset_id=dataset_cfg.dataset_id,
+                        augmentation_id=augmentation_cfg.augmentation_id,
+                        method_id=method_id,
+                        model_id=model_cfg.model_id,
+                    )
+                    should_run = _should_run_combo(
+                        on_existing=args.on_existing,
+                        existing_runs=existing_runs,
+                        dataset_id=dataset_cfg.dataset_id,
+                        augmentation_id=augmentation_cfg.augmentation_id,
+                        method_id=method_id,
+                        model_id=model_cfg.model_id,
+                    )
+                    if not should_run:
+                        latest_existing = existing_runs[0] if existing_runs else {}
+                        save_result(
+                            workflow_results,
+                            {
+                                "experiment_id": latest_existing.get("experiment_id"),
+                                "dataset": dataset_cfg.dataset_id,
+                                "augmentation": augmentation_cfg.augmentation_id,
+                                "method": method_id,
+                                "model": model_cfg.model_id,
+                                "status": "skipped_existing",
+                                "run_id": latest_existing.get("run_id"),
+                                "train_accuracy": latest_existing.get("train_accuracy"),
+                                "val_accuracy": latest_existing.get("val_accuracy"),
+                                "train_loss": latest_existing.get("train_loss"),
+                                "val_loss": latest_existing.get("val_loss"),
+                                "test_accuracy": latest_existing.get("accuracy"),
+                                "test_f1_score": latest_existing.get("f1_score"),
+                                "training_time_seconds": latest_existing.get("training_time_seconds"),
+                                "model_path": latest_existing.get("final_model_path"),
+                                "report_path": latest_existing.get("run_dir"),
+                            },
+                        )
+                        continue
+
                     experiment_id = _build_experiment_id(
                         dataset_id=dataset_cfg.dataset_id,
                         augmentation_id=augmentation_cfg.augmentation_id,
@@ -525,6 +660,7 @@ def main() -> None:
                         "report_path": eval_result.get("run_dir"),
                     }
                     save_result(workflow_results, result_row)
+                    report_index = build_experiment_index(REPORT_ROOT)
 
                     if rc != 0:
                         failed_id = "{}:{}:{}:{}".format(

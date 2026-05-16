@@ -390,3 +390,35 @@ Menyelaraskan seluruh dokumentasi dengan implementasi terbaru workflow kombinasi
 ### Next step
 1. Jika diperlukan, tambahkan screenshot dashboard terbaru di dokumentasi untuk memperjelas alur Explorer dan Perbandingan.
 2. Tambahkan contoh skenario benchmark bertahap (small/medium/full) di `pipeline.md`.
+
+## 2026-05-16  (Asia/Jakarta) - Sesi 10
+
+### Tujuan sesi
+Menambahkan validasi kombinasi training yang sudah pernah dijalankan, lalu meminta konfirmasi retrain sesuai struktur folder artifact terbaru.
+
+### Aktivitas yang sudah dilakukan
+1. Validasi struktur folder artifact terkini:
+   - `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`
+   - `trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`
+2. Menambahkan kontrol run existing di `training/train.py`:
+   - argumen baru `--on-existing {ask,retrain,skip}`,
+   - cek histori run per kombinasi dataset+augmentasi+method+model,
+   - mode `ask` meminta konfirmasi retrain,
+   - mode `retrain` langsung membuat run/model baru,
+   - mode `skip` melewati kombinasi lama.
+3. Menambahkan prompt di `main.py` sebelum training:
+   - user memilih perilaku saat kombinasi sudah pernah training (`ask/retrain/skip`).
+4. Memperbarui dokumentasi agar sinkron:
+   - `documentation/architecture.md`
+   - `documentation/arsitectur.md`
+   - `documentation/dokumentasi_aplikasi.md`
+   - `documentation/pipeline.md`
+   - `documentation/requirements.md`
+
+### Keputusan
+1. Default perilaku existing run adalah `ask` agar aman dan tidak menimpa analisis tanpa konfirmasi user.
+2. Training ulang selalu membuat run/model baru karena `run_id` berbasis timestamp.
+
+### Next step
+1. Jika dibutuhkan, tambahkan opsi konfirmasi global sekali per batch (bukan per kombinasi) pada mode `ask`.
+2. Tambahkan badge/status "skipped_existing" di UI report jika ingin terlihat langsung di dashboard.

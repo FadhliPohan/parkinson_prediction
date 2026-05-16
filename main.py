@@ -171,6 +171,16 @@ def ask_preprocessing_mode() -> str:
     return selected.split(" ", 1)[0].strip()
 
 
+def ask_on_existing_mode() -> str:
+    options = [
+        "ask (tanya per kombinasi jika sudah pernah training)",
+        "retrain (langsung training ulang semua kombinasi yang sudah ada)",
+        "skip (lewati kombinasi yang sudah pernah training)",
+    ]
+    selected = ask_choice("Perilaku jika kombinasi sudah pernah ditraining", options, default_index=0)
+    return selected.split(" ", 1)[0].strip()
+
+
 def ask_dataset_target(dataset_registry: DatasetRegistry) -> str:
     dataset_ids = dataset_registry.list_dataset_ids()
     option_all = "all (jalankan berurutan semua dataset)"
@@ -198,6 +208,7 @@ def build_train_command(
     augment_info: bool,
     preprocessing_mode: str,
     augmentations: Optional[str] = None,
+    on_existing: str = "ask",
 ) -> List[str]:
     train_script = _resolve_script("train.py")
     command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
@@ -216,6 +227,7 @@ def build_train_command(
         command.append("--split-first")
     if augment_info:
         command.append("--augment-info")
+    command.extend(["--on-existing", on_existing])
 
     epochs = ask_optional_int("Override epoch stage-1")
     batch_size = ask_optional_int("Override batch size")
@@ -323,6 +335,7 @@ def main() -> None:
         elif choice == "5":
             selected_model = ask_choice("Pilih model", model_ids)
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
+            on_existing_mode = ask_on_existing_mode()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models=selected_model,
@@ -332,10 +345,12 @@ def main() -> None:
                 split_first=False,
                 augment_info=False,
                 preprocessing_mode=ask_preprocessing_mode(),
+                on_existing=on_existing_mode,
             )
             run_command(command)
         elif choice == "6":
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
+            on_existing_mode = ask_on_existing_mode()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models="all",
@@ -345,9 +360,11 @@ def main() -> None:
                 split_first=False,
                 augment_info=False,
                 preprocessing_mode=ask_preprocessing_mode(),
+                on_existing=on_existing_mode,
             )
             run_command(command)
         elif choice == "7":
+            on_existing_mode = ask_on_existing_mode()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models="all",
@@ -357,6 +374,7 @@ def main() -> None:
                 split_first=False,
                 augment_info=False,
                 preprocessing_mode=ask_preprocessing_mode(),
+                on_existing=on_existing_mode,
             )
             run_command(command)
         elif choice == "8":
@@ -370,6 +388,7 @@ def main() -> None:
                     default_index=method_ids.index(method_registry.default_method),
                 )
 
+            on_existing_mode = ask_on_existing_mode()
             command = build_train_command(
                 dataset_id=selected_dataset,
                 models="all",
@@ -379,6 +398,7 @@ def main() -> None:
                 split_first=True,
                 augment_info=True,
                 preprocessing_mode=ask_preprocessing_mode(),
+                on_existing=on_existing_mode,
             )
             run_command(command)
         elif choice == "9":
@@ -404,6 +424,7 @@ def main() -> None:
                 model_ids,
                 default="all",
             )
+            on_existing_mode = ask_on_existing_mode()
 
             command = build_train_command(
                 dataset_id=dataset_arg,
@@ -415,6 +436,7 @@ def main() -> None:
                 augment_info=ask_yes_no("Tampilkan info augmentasi sebelum training?", False),
                 preprocessing_mode="augment",
                 augmentations=augmentations_arg,
+                on_existing=on_existing_mode,
             )
             run_command(command)
         else:

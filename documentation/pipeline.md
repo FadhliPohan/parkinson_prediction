@@ -130,6 +130,10 @@ Aktivitas:
 4. User memilih model (single/multi/all).
 5. Orchestrator mengeksekusi kombinasi secara independen.
 6. Setiap kombinasi punya `experiment_id` unik.
+7. Jika kombinasi sudah pernah ditraining, sistem akan menangani sesuai mode `on-existing`:
+   - `ask`: tanya user apakah perlu training ulang,
+   - `retrain`: langsung training ulang,
+   - `skip`: lewati kombinasi lama.
 
 Output tambahan:
 1. Ringkasan batch workflow di:
@@ -153,7 +157,12 @@ Setelah command dieksekusi:
    - augmentasi loop,
    - method loop,
    - model loop.
-7. Simpan hasil run per kombinasi.
+7. Cek apakah kombinasi sudah punya run sebelumnya.
+8. Jika run sudah ada:
+   - mode `ask` akan meminta konfirmasi retrain,
+   - mode `retrain` akan membuat run/model baru dengan timestamp training baru,
+   - mode `skip` akan melewati kombinasi lama.
+9. Simpan hasil run per kombinasi.
 
 ## 7. Contoh Command
 
@@ -173,7 +182,8 @@ python3 training/train.py \
   --augmentations all \
   --method all \
   --models resnet50,mobilenetv2,yolov8 \
-  --split-first
+  --split-first \
+  --on-existing ask
 ```
 
 ### C. Kompatibilitas mode lama
@@ -183,6 +193,18 @@ python3 training/train.py \
   --models all \
   --all-methods \
   --preprocessing-mode both
+```
+
+### D. Mode existing run
+```bash
+# Tanyakan dulu jika kombinasi sudah pernah training
+python3 training/train.py ... --on-existing ask
+
+# Langsung retrain semua kombinasi yang sudah ada
+python3 training/train.py ... --on-existing retrain
+
+# Lewati kombinasi yang sudah ada
+python3 training/train.py ... --on-existing skip
 ```
 
 ## 8. Struktur Output
@@ -236,6 +258,8 @@ trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
    - Pastikan minimal satu run sukses dan artifact report terbentuk.
 5. Training terlalu berat:
    - Kurangi kombinasi (dataset/method/model/augmentasi) atau jalankan batch bertahap.
+6. Kombinasi lama ikut tertimpa analisis:
+   - Gunakan `--on-existing ask` atau `--on-existing skip` agar run lama tidak tercampur tanpa sengaja.
 
 ## 12. Catatan Penting
 1. Setiap kombinasi eksperimen dijalankan terpisah agar analisis tidak tercampur.

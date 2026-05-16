@@ -10,6 +10,7 @@
   - Balancing kelas menggunakan augmentasi rotasi kecil `-20` s/d `+20` derajat untuk kelas minoritas.
   - Eksekusi kombinasi eksperimen terpisah dengan urutan `dataset -> augmentasi -> method -> model`.
   - Setiap kombinasi memiliki `experiment_id` unik.
+  - Validasi run existing: sistem bisa `ask/retrain/skip` saat kombinasi sudah pernah ditraining.
   - Report dan artifact training berbasis struktur `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>`.
   - Dashboard report bertingkat (Explorer + Perbandingan) berbasis indeks manifest.
 

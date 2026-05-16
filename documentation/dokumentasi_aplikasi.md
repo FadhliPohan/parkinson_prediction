@@ -83,7 +83,8 @@ python3 training/train.py \
   --dataset parkinson_merder \
   --augmentations augment_on_the_fly \
   --models mobilenetv2 \
-  --method transfer_learning
+  --method transfer_learning \
+  --on-existing ask
 ```
 
 Contoh banyak kombinasi:
@@ -93,11 +94,16 @@ python3 training/train.py \
   --augmentations all \
   --models all \
   --method all \
-  --split-first
+  --split-first \
+  --on-existing ask
 ```
 
 Catatan kompatibilitas:
 - Opsi lama `--preprocessing-mode augment|no_augment|both` masih didukung.
+- Opsi `--on-existing`:
+  - `ask`: jika kombinasi sudah pernah training, user ditanya perlu retrain atau tidak.
+  - `retrain`: langsung training ulang dan membuat run/model baru dengan timestamp training baru.
+  - `skip`: kombinasi lama dilewati.
 
 ### E. Dashboard Streamlit
 ```bash

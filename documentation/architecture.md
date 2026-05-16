@@ -130,10 +130,15 @@ parkinson_prediction/
    - `--method` (single, multi CSV, atau `all`) atau `--all-methods`
    - `--models` (single, multi CSV, atau `all`)
    - `--check-first`, `--split-first`, `--augment-info`
+   - `--on-existing {ask,retrain,skip}`
 3. Orchestrator mengeksekusi kombinasi terpisah dengan urutan:
    - `dataset -> augmentasi -> method -> model`.
 4. Setiap kombinasi diberi `experiment_id` unik.
-5. Training didispatch ke runner framework melalui `src/training/trainer.py`.
+5. Jika kombinasi sudah pernah ditraining:
+   - `ask` akan menanyakan konfirmasi training ulang,
+   - `retrain` langsung membuat run/model baru dengan timestamp baru,
+   - `skip` melewati kombinasi tersebut.
+6. Training didispatch ke runner framework melalui `src/training/trainer.py`.
 
 ## 9. Artifact Report dan Model
 1. Report disimpan ke `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
@@ -205,7 +210,8 @@ python3 training/train.py \
   --augmentations all \
   --method all \
   --models resnet50,mobilenetv2,yolov8 \
-  --split-first
+  --split-first \
+  --on-existing ask
 ```
 3. Dashboard:
 ```bash
