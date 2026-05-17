@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -284,6 +285,105 @@ def _format_option_with_run_count(option: str, count_map: Dict[str, int]) -> str
     return f"{option} ({count_map.get(str(option), 0)} run)"
 
 
+def _sanitize_widget_key(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value)).strip("_")
+    return cleaned or "col"
+
+
+def _render_filterable_dataframe(
+    df: pd.DataFrame,
+    key_prefix: str,
+    *,
+    use_container_width: bool = True,
+    filters_expanded: bool = False,
+    empty_message: str = "Tidak ada data untuk ditampilkan.",
+) -> pd.DataFrame:
+    if df.empty:
+        st.info(empty_message)
+        return df
+
+    filtered_df = df.copy()
+
+    with st.expander("Search / Filter Tabel", expanded=filters_expanded):
+        c_search_1, c_search_2 = st.columns((2, 1))
+        search_term = c_search_1.text_input(
+            "Cari keyword",
+            key=f"{key_prefix}_search_term",
+            placeholder="Cari teks/angka pada tabel...",
+        ).strip()
+        search_column_options = ["(Semua kolom)"] + [str(col) for col in filtered_df.columns]
+        selected_search_column = c_search_2.selectbox(
+            "Kolom pencarian",
+            options=search_column_options,
+            index=0,
+            key=f"{key_prefix}_search_col",
+        )
+
+        filter_columns = st.multiselect(
+            "Filter nilai kolom (opsional)",
+            options=[str(col) for col in filtered_df.columns],
+            default=[],
+            key=f"{key_prefix}_filter_cols",
+        )
+
+        exact_filters: Dict[str, set[str]] = {}
+        contains_filters: Dict[str, str] = {}
+
+        for column_name in filter_columns:
+            safe_col_key = _sanitize_widget_key(column_name)
+            col_series = filtered_df[column_name]
+            unique_values = sorted({str(item) for item in col_series.dropna().unique()})
+
+            if unique_values and len(unique_values) <= 40:
+                selected_values = st.multiselect(
+                    f"Nilai untuk `{column_name}`",
+                    options=unique_values,
+                    default=[],
+                    key=f"{key_prefix}_filter_vals_{safe_col_key}",
+                )
+                if selected_values:
+                    exact_filters[column_name] = set(selected_values)
+            else:
+                contains_value = st.text_input(
+                    f"Cari teks di `{column_name}`",
+                    key=f"{key_prefix}_filter_contains_{safe_col_key}",
+                    placeholder="contains...",
+                ).strip()
+                if contains_value:
+                    contains_filters[column_name] = contains_value
+
+        if search_term:
+            if selected_search_column == "(Semua kolom)":
+                search_mask = pd.Series(False, index=filtered_df.index)
+                for col in filtered_df.columns:
+                    col_mask = filtered_df[col].astype(str).str.contains(search_term, case=False, na=False, regex=False)
+                    search_mask = search_mask | col_mask
+                filtered_df = filtered_df[search_mask]
+            elif selected_search_column in filtered_df.columns:
+                filtered_df = filtered_df[
+                    filtered_df[selected_search_column].astype(str).str.contains(
+                        search_term, case=False, na=False, regex=False
+                    )
+                ]
+
+        for col, accepted in exact_filters.items():
+            if col in filtered_df.columns:
+                filtered_df = filtered_df[filtered_df[col].astype(str).isin(accepted)]
+
+        for col, contains_text in contains_filters.items():
+            if col in filtered_df.columns:
+                filtered_df = filtered_df[
+                    filtered_df[col].astype(str).str.contains(
+                        contains_text, case=False, na=False, regex=False
+                    )
+                ]
+
+        st.caption(f"Hasil filter: {len(filtered_df)} / {len(df)} baris")
+
+    st.dataframe(filtered_df, use_container_width=use_container_width)
+    return filtered_df
+
+
 def _build_record_dataframe(records: List[Dict[str, object]]) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for item in records:
@@ -394,7 +494,12 @@ def render_dataset_tab(dataset_registry: DatasetRegistry) -> None:
     with c1:
         st.markdown("**Dataset Original**")
         if not original_df.empty:
-            st.dataframe(original_df, use_container_width=True)
+            _render_filterable_dataframe(
+                original_df,
+                key_prefix="dataset_original_table",
+                use_container_width=True,
+                empty_message="Dataset original belum siap atau belum terbaca.",
+            )
             chart_df = original_df.set_index("class_name")[["count"]]
             st.bar_chart(chart_df)
         else:
@@ -403,7 +508,12 @@ def render_dataset_tab(dataset_registry: DatasetRegistry) -> None:
     with c2:
         st.markdown("**Dataset Split (train/testing/validation)**")
         if not split_df.empty:
-            st.dataframe(split_df, use_container_width=True)
+            _render_filterable_dataframe(
+                split_df,
+                key_prefix="dataset_split_table",
+                use_container_width=True,
+                empty_message="Dataset split belum tersedia.",
+            )
             chart_df = split_df.drop(columns=["total"], errors="ignore")
             if not chart_df.empty:
                 st.bar_chart(chart_df)
@@ -514,7 +624,12 @@ def _render_run_detail(record: Dict[str, object]) -> None:
                 st.line_chart(history_df[loss_cols])
 
             with st.expander("Training History (Tabel)"):
-                st.dataframe(history_df, use_container_width=True)
+                _render_filterable_dataframe(
+                    history_df,
+                    key_prefix=f"run_history_{run_id}",
+                    use_container_width=True,
+                    empty_message="Training history tidak tersedia.",
+                )
         else:
             st.info("`training_history.csv` tidak tersedia pada run ini.")
 
@@ -529,17 +644,32 @@ def _render_run_detail(record: Dict[str, object]) -> None:
         cls_df = _read_csv(run_dir / "classification_report.csv")
         if not cls_df.empty:
             st.markdown("**Classification Report**")
-            st.dataframe(cls_df, use_container_width=True)
+            _render_filterable_dataframe(
+                cls_df,
+                key_prefix=f"run_cls_{run_id}",
+                use_container_width=True,
+                empty_message="Classification report tidak tersedia.",
+            )
 
         cm_df = _read_csv(run_dir / "confusion_matrix.csv")
         if not cm_df.empty:
             st.markdown("**Confusion Matrix (CSV)**")
-            st.dataframe(cm_df, use_container_width=True)
+            _render_filterable_dataframe(
+                cm_df,
+                key_prefix=f"run_cm_{run_id}",
+                use_container_width=True,
+                empty_message="Confusion matrix tidak tersedia.",
+            )
 
         split_df = _read_csv(run_dir / "split_distribution.csv")
         if not split_df.empty:
             st.markdown("**Distribusi Split pada Run Ini**")
-            st.dataframe(split_df, use_container_width=True)
+            _render_filterable_dataframe(
+                split_df,
+                key_prefix=f"run_split_{run_id}",
+                use_container_width=True,
+                empty_message="Distribusi split tidak tersedia.",
+            )
 
         if cls_df.empty and cm_df.empty and split_df.empty:
             st.info("Belum ada tabel CSV detail untuk run ini.")
@@ -621,7 +751,12 @@ def _render_comparison_section(
         if "runs" in method_summary.columns:
             method_summary["runs"] = method_summary["runs"].fillna(0).astype(int)
         method_summary = method_summary.sort_values(by="avg_val_accuracy", ascending=False, na_position="last")
-        st.dataframe(method_summary, use_container_width=True)
+        _render_filterable_dataframe(
+            method_summary,
+            key_prefix=f"cmp_method_{selected_dataset}",
+            use_container_width=True,
+            empty_message="Data perbandingan method belum tersedia.",
+        )
 
     with tab_model:
         method_options = method_registry.list_method_ids()
@@ -660,7 +795,12 @@ def _render_comparison_section(
         if "runs" in model_summary.columns:
             model_summary["runs"] = model_summary["runs"].fillna(0).astype(int)
         model_summary = model_summary.sort_values(by="avg_val_accuracy", ascending=False, na_position="last")
-        st.dataframe(model_summary, use_container_width=True)
+        _render_filterable_dataframe(
+            model_summary,
+            key_prefix=f"cmp_model_{selected_dataset}_{selected_method}",
+            use_container_width=True,
+            empty_message="Data perbandingan model belum tersedia.",
+        )
 
     with tab_aug:
         by_aug = _latest_per_key(subset_df, ["dataset", "augmentation", "method", "model"]) if not subset_df.empty else pd.DataFrame()
@@ -690,7 +830,12 @@ def _render_comparison_section(
         if "runs" in aug_summary.columns:
             aug_summary["runs"] = aug_summary["runs"].fillna(0).astype(int)
         aug_summary = aug_summary.sort_values(by="avg_val_accuracy", ascending=False, na_position="last")
-        st.dataframe(aug_summary, use_container_width=True)
+        _render_filterable_dataframe(
+            aug_summary,
+            key_prefix=f"cmp_aug_{selected_dataset}",
+            use_container_width=True,
+            empty_message="Data perbandingan augmentasi belum tersedia.",
+        )
 
     with tab_rank:
         if subset_df.empty:
@@ -699,24 +844,27 @@ def _render_comparison_section(
         latest_runs = _latest_per_key(subset_df, ["dataset", "augmentation", "method", "model"])
         ranking = latest_runs.sort_values(by="val_accuracy", ascending=False, na_position="last").reset_index(drop=True)
         ranking.index = ranking.index + 1
-        st.dataframe(
-            ranking[
-                [
-                    "dataset",
-                    "augmentation",
-                    "method",
-                    "model",
-                    "run_id",
-                    "epochs",
-                    "batch_size",
-                    "fine_tune_epochs",
-                    "val_accuracy",
-                    "test_accuracy",
-                    "f1_score",
-                    "training_time_seconds",
-                ]
-            ],
+        ranking_df = ranking[
+            [
+                "dataset",
+                "augmentation",
+                "method",
+                "model",
+                "run_id",
+                "epochs",
+                "batch_size",
+                "fine_tune_epochs",
+                "val_accuracy",
+                "test_accuracy",
+                "f1_score",
+                "training_time_seconds",
+            ]
+        ]
+        _render_filterable_dataframe(
+            ranking_df,
+            key_prefix=f"cmp_rank_{selected_dataset}",
             use_container_width=True,
+            empty_message="Ranking model belum tersedia.",
         )
 
 
@@ -737,7 +885,12 @@ def render_report_tab(
     latest_df = pd.DataFrame(latest_rows)
     if not latest_df.empty:
         st.markdown("**Ringkasan Run Terbaru per Kombinasi**")
-        st.dataframe(latest_df, use_container_width=True)
+        _render_filterable_dataframe(
+            latest_df,
+            key_prefix="report_latest_summary",
+            use_container_width=True,
+            empty_message="Ringkasan run terbaru belum tersedia.",
+        )
 
     tab_explorer, tab_comparison = st.tabs(["Explorer", "Perbandingan"])
 
@@ -982,7 +1135,12 @@ def render_prediction_tab(
                     "run_id": selected_runs.get(model_name) or "-",
                 }
             )
-        st.dataframe(pd.DataFrame(model_run_rows), use_container_width=True)
+        _render_filterable_dataframe(
+            pd.DataFrame(model_run_rows),
+            key_prefix=f"predict_active_models_{selected_dataset}_{selected_aug}_{selected_method}",
+            use_container_width=True,
+            empty_message="Belum ada model aktif untuk ditampilkan.",
+        )
 
     if st.button("Jalankan Prediksi", type="primary"):
         summary_rows = []
@@ -1047,14 +1205,24 @@ def render_prediction_tab(
         if summary_rows:
             summary_df = pd.DataFrame(summary_rows).sort_values(by="confidence", ascending=False).reset_index(drop=True)
             st.markdown("**Hasil Prediksi per Model**")
-            st.dataframe(summary_df, use_container_width=True)
+            _render_filterable_dataframe(
+                summary_df,
+                key_prefix=f"predict_summary_{selected_dataset}_{selected_aug}_{selected_method}",
+                use_container_width=True,
+                empty_message="Hasil prediksi belum tersedia.",
+            )
 
         if prob_rows:
             prob_df = pd.DataFrame(prob_rows)
             st.markdown("**Perbandingan Probabilitas**")
             pivot_df = prob_df.pivot(index="class", columns="model", values="probability").fillna(0.0)
             st.bar_chart(pivot_df)
-            st.dataframe(prob_df, use_container_width=True)
+            _render_filterable_dataframe(
+                prob_df,
+                key_prefix=f"predict_prob_{selected_dataset}_{selected_aug}_{selected_method}",
+                use_container_width=True,
+                empty_message="Probabilitas prediksi belum tersedia.",
+            )
 
         if errors:
             st.error("Sebagian model gagal dipakai:\n- " + "\n- ".join(errors))

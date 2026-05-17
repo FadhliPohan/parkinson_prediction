@@ -600,3 +600,31 @@ Melengkapi seluruh filter Streamlit agar berbasis registry/config (bukan hanya d
 
 ### Next step
 1. Jika diperlukan, tambahkan mode toggle pada filter (`show all configured` vs `show only with run`) untuk pengguna non-teknis.
+
+## 2026-05-17  (Asia/Jakarta) - Sesi 16
+
+### Tujuan sesi
+Menambahkan input search/filter pada setiap tabel yang ditampilkan di dashboard Streamlit.
+
+### Aktivitas yang sudah dilakukan
+1. Membuat helper reusable di `web/app.py`:
+   - `_render_filterable_dataframe(...)` untuk menampilkan tabel + kontrol pencarian/filter.
+   - `_sanitize_widget_key(...)` untuk menjaga key widget aman dan stabil.
+2. Fitur filter yang ditambahkan pada setiap tabel:
+   - pencarian keyword global atau spesifik kolom,
+   - filter nilai exact untuk kolom dengan jumlah nilai unik kecil,
+   - fallback filter `contains` untuk kolom dengan cardinality besar,
+   - ringkasan jumlah baris hasil filter (`hasil / total`).
+3. Menerapkan helper ke seluruh tabel (`st.dataframe`) di semua halaman:
+   - Tab `Dataset`,
+   - Tab `Training Report` (Explorer, detail run, perbandingan, ranking, summary),
+   - Tab `Prediksi` (model aktif, hasil prediksi, probabilitas).
+4. Validasi:
+   - `python3 -m compileall -q web/app.py` -> sukses,
+   - smoke test Streamlit headless -> app berhasil start.
+
+### Keputusan
+1. Semua tabel kini memakai pola interaksi yang konsisten untuk search/filter agar UX seragam lintas halaman.
+
+### Next step
+1. Jika dibutuhkan, tambahkan opsi export CSV dari hasil filter aktif pada tiap tabel.
