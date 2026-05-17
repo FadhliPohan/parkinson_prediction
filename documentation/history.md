@@ -503,3 +503,100 @@ Menambahkan pengaturan runtime per method di awal training (epoch, batch size, f
 
 ### Next step
 1. Jika diperlukan, tambahkan filter perbandingan berbasis nilai runtime config (mis. hanya run dengan `batch_size` tertentu) pada dashboard Streamlit.
+
+## 2026-05-17  (Asia/Jakarta) - Sesi 13
+
+### Tujuan sesi
+Memperbaiki error `KeyError: 'run_dir'` di Streamlit `Training Report > Explorer`, sekaligus merapikan tampilan halaman `Dataset`, `Training Report`, dan `Prediksi`.
+
+### Aktivitas yang sudah dilakukan
+1. Membaca ulang dokumentasi arsitektur/aplikasi/pipeline untuk sinkronisasi struktur artifact terbaru.
+2. Menelusuri sumber error di `web/app.py`:
+   - dataframe explorer tidak memiliki kolom `run_dir`,
+   - tetapi kode detail run tetap mengakses `target_df.iloc[0]["run_dir"]`.
+3. Patch `web/app.py`:
+   - menambahkan kolom `run_dir` ke dataframe record,
+   - menambahkan fallback resolver `_resolve_run_dir(...)` agar kompatibel saat field path tidak lengkap,
+   - menambahkan normalisasi pemilihan `run_id` berbasis string untuk menghindari mismatch tipe data.
+4. Meningkatkan layout dan UX dashboard:
+   - injeksi style CSS ringan (tipografi, card metric, panel info),
+   - halaman `Dataset`: ringkasan metrik cepat + tabel/grafik original dan split lebih terstruktur,
+   - halaman `Training Report > Explorer`: filter bertingkat lebih rapi, label run lebih informatif (timestamp + metric), detail run dipecah ke tab grafik/tabel/manifest,
+   - halaman `Prediksi`: filter dan pemilihan run lebih jelas, preview model-run aktif, spinner saat inferensi, serta handling error yang lebih rapi.
+5. Validasi teknis:
+   - `python3 -m compileall -q web/app.py` -> sukses,
+   - smoke test startup: `.venv/bin/streamlit run web/app.py --server.headless true --server.port 8765` -> app berhasil start,
+   - verifikasi dataframe index: kolom `run_dir` tersedia dan tidak null.
+
+### Keputusan
+1. Dashboard tetap diposisikan sebagai reader/report explorer, tanpa menambah logic training ke UI.
+2. Resolver path run dibuat defensif (`run_dir` -> `report_dir` -> fallback konstruksi path) agar lebih tahan terhadap variasi metadata run.
+
+### Next step
+1. Jika diperlukan, tambahkan opsi pencarian cepat (keyword run/model/method) di Explorer untuk dataset dengan jumlah run besar.
+2. Pertimbangkan formatter persentase metrik di tabel ringkasan agar lebih mudah dibaca non-teknis.
+
+## 2026-05-17  (Asia/Jakarta) - Sesi 14
+
+### Tujuan sesi
+Menstabilkan tampilan warna dashboard Streamlit agar tidak berubah saat user beralih ke dark mode.
+
+### Aktivitas yang sudah dilakukan
+1. Mengupdate CSS di `web/app.py` agar palet warna utama di-lock pada selector light/dark.
+2. Menambahkan override untuk container utama, sidebar, widget input/select, metric card, dan tabel agar konsisten lintas mode.
+3. Menambahkan konfigurasi tema resmi Streamlit di `.streamlit/config.toml`:
+   - mendefinisikan `theme.light` dan `theme.dark` dengan palet yang sama,
+   - menyamakan warna sidebar di kedua mode.
+4. Menjalankan validasi:
+   - `python3 -m compileall -q web/app.py` -> sukses,
+   - smoke test startup Streamlit headless -> app berhasil start.
+
+### Keputusan
+1. Pendekatan fix menggunakan dua lapis (config theme + CSS override) agar perubahan mode tidak menggeser identitas visual dashboard.
+
+### Next step
+1. Jika ingin tetap mempertahankan dark mode sebagai mode visual berbeda, buat varian palet dark yang setara secara kontras namun tetap brand-consistent.
+
+## 2026-05-17  (Asia/Jakarta) - Sesi 15
+
+### Tujuan sesi
+Melengkapi seluruh filter Streamlit agar berbasis registry/config (bukan hanya data run yang sudah ada), khususnya masalah `Explorer -> 3) Method Training` yang hanya menampilkan 2 opsi.
+
+### Aktivitas yang sudah dilakukan
+1. Audit menyeluruh sumber opsi filter di seluruh halaman:
+   - `Training Report > Explorer`,
+   - `Training Report > Perbandingan`,
+   - `Prediksi`.
+2. Identifikasi akar masalah:
+   - filter method sebelumnya diambil dari subset data report terfilter (`dataset + augmentasi`),
+   - saat kombinasi tertentu belum punya semua run method, opsi method ikut berkurang.
+3. Perbaikan `web/app.py`:
+   - menambahkan import registry:
+     - `TrainingAugmentationRegistry`,
+     - `TrainingMethodRegistry`,
+   - mengganti sumber opsi filter menjadi registry/config:
+     - dataset dari `DatasetRegistry`,
+     - augmentasi dari `DatasetRegistry.augmentation_options` / `TrainingAugmentationRegistry`,
+     - method dari `TrainingMethodRegistry`,
+     - model dari `ModelRegistry` (enabled),
+   - menambahkan formatter label opsi berisi jumlah run (`(<n> run)`) tanpa mengubah value asli opsi,
+   - memperbarui tab perbandingan agar tabel method/model/augmentasi tetap memuat opsi lengkap (opsi tanpa run tetap muncul dengan `runs=0`),
+   - memperbarui tab prediksi agar model terdaftar tetap lengkap, termasuk notifikasi jika model tertentu belum punya run pada kombinasi filter terpilih.
+4. Menyesuaikan wiring `main()` agar registry method/augmentasi dipassing ke renderer tab report & prediksi.
+
+### Validasi yang dilakukan
+1. `python3 -m compileall -q web/app.py` -> sukses.
+2. Smoke test startup Streamlit headless -> app berhasil start.
+3. Verifikasi coverage filter via script:
+   - method options global terbaca 4:
+     - `baseline`,
+     - `full_fine_tuning`,
+     - `transfer_learning`,
+     - `transfer_learning_mixed_precision`,
+   - pada kombinasi `augment_on_the_fly` yang sebelumnya hanya tampil 2, sekarang tetap menampilkan 4 opsi dengan count run yang sesuai.
+
+### Keputusan
+1. Filter UI distandarkan berbasis registry agar konsisten dengan konfigurasi pipeline, sementara ketersediaan data run ditampilkan sebagai informasi count.
+
+### Next step
+1. Jika diperlukan, tambahkan mode toggle pada filter (`show all configured` vs `show only with run`) untuk pengguna non-teknis.
