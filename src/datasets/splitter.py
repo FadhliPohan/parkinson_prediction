@@ -52,6 +52,12 @@ def _parse_resize(value: Optional[Sequence[int]]) -> Optional[Tuple[int, int]]:
     return (width, height)
 
 
+def _serialize_resize(value: Optional[Tuple[int, int]]) -> Optional[List[int]]:
+    if value is None:
+        return None
+    return [int(value[0]), int(value[1])]
+
+
 def _normalize_to_rgb(image: Image.Image) -> Image.Image:
     if image.mode == "RGB":
         return image
@@ -238,6 +244,14 @@ def split_dataset(
     test_resize = _parse_resize(resize_cfg.get("testing"))
     validation_resize = _parse_resize(resize_cfg.get("validation"))
 
+    # Jaga konsistensi format split: jika testing/validation tidak diset,
+    # otomatis ikuti format resize train.
+    if train_resize is not None:
+        if test_resize is None:
+            test_resize = train_resize
+        if validation_resize is None:
+            validation_resize = train_resize
+
     if split_dir.exists():
         shutil.rmtree(str(split_dir))
     split_dir.mkdir(parents=True, exist_ok=True)
@@ -325,11 +339,16 @@ def split_dataset(
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "seed": int(seed),
         "original_dir": str(original_dir),
         "split_dir": str(split_dir),
         "class_mode": class_mode,
+        "resize": {
+            "train": _serialize_resize(train_resize),
+            "testing": _serialize_resize(test_resize),
+            "validation": _serialize_resize(validation_resize),
+        },
         "split_ratio": {
             "train": train_ratio,
             "testing": test_ratio,

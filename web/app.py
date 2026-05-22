@@ -26,6 +26,7 @@ from src.reporting.report_reader import (
     build_latest_summary_table,
     safe_load_json,
 )
+from src.reporting.html_report import build_full_html_report
 from src.reporting.schemas import VISUAL_FILES
 from src.training.augmentations import TrainingAugmentationRegistry
 from src.training.strategies import TrainingMethodRegistry
@@ -868,6 +869,91 @@ def _render_comparison_section(
         )
 
 
+def _render_full_report_export_section(
+    dataset_registry: DatasetRegistry,
+    model_registry: ModelRegistry,
+    augmentation_registry: TrainingAugmentationRegistry,
+    method_registry: TrainingMethodRegistry,
+) -> None:
+    st.markdown("**Generate Laporan HTML (Auto Print A4)**")
+    st.caption(
+        "Tersedia 2 mode: `Lengkap` (embed semua gambar artifact run, file besar) "
+        "dan `Ringkas` (tanpa embed gambar artifact run, file lebih ringan)."
+    )
+
+    c_btn_1, c_btn_2 = st.columns(2)
+    do_generate_full = c_btn_1.button("Generate Report Lengkap", type="primary", key="generate_full_html_report_btn")
+    do_generate_compact = c_btn_2.button("Generate Report Ringkas", type="secondary", key="generate_compact_html_report_btn")
+
+    if do_generate_full:
+        with st.spinner("Menyusun laporan lengkap. Proses bisa memakan waktu karena semua run akan dirangkum..."):
+            _, output_path = build_full_html_report(
+                dataset_registry=dataset_registry,
+                model_registry=model_registry,
+                augmentation_registry=augmentation_registry,
+                method_registry=method_registry,
+                report_root=REPORT_ROOT,
+                report_mode="full",
+                return_html=False,
+            )
+        st.session_state["html_report_last_path"] = str(output_path)
+        st.session_state["html_report_last_mode"] = "Lengkap"
+        st.success(f"Laporan lengkap berhasil dibuat: {output_path}")
+
+    if do_generate_compact:
+        with st.spinner("Menyusun laporan ringkas. Proses lebih cepat karena gambar run tidak di-embed..."):
+            _, output_path = build_full_html_report(
+                dataset_registry=dataset_registry,
+                model_registry=model_registry,
+                augmentation_registry=augmentation_registry,
+                method_registry=method_registry,
+                report_root=REPORT_ROOT,
+                report_mode="compact",
+                return_html=False,
+            )
+        st.session_state["html_report_last_path"] = str(output_path)
+        st.session_state["html_report_last_mode"] = "Ringkas"
+        st.success(f"Laporan ringkas berhasil dibuat: {output_path}")
+
+    output_path_state = st.session_state.get("html_report_last_path")
+    output_mode_state = st.session_state.get("html_report_last_mode", "-")
+    if not output_path_state:
+        return
+
+    output_path = Path(str(output_path_state))
+    if not output_path.exists():
+        st.warning("File laporan terakhir tidak ditemukan. Silakan generate ulang.")
+        return
+
+    file_size_mb = output_path.stat().st_size / (1024 * 1024)
+    st.markdown("**Output Laporan Terakhir**")
+    st.code(
+        f"{output_path}\nMode: {output_mode_state}\nUkuran file: {file_size_mb:.2f} MB"
+    )
+
+    st.download_button(
+        "Download HTML Report",
+        data=output_path.read_bytes(),
+        file_name=output_path.name,
+        mime="text/html",
+        key="download_full_html_report_btn",
+    )
+
+    try:
+        st.link_button(
+            "Buka Laporan (Auto Print)",
+            url=output_path.resolve().as_uri(),
+            key="open_full_html_report_link_btn",
+            type="secondary",
+        )
+    except Exception:
+        pass
+
+    st.info(
+        "Saat file HTML dibuka di browser, window print akan terpanggil otomatis dan layout menyesuaikan kertas A4."
+    )
+
+
 def render_report_tab(
     dataset_registry: DatasetRegistry,
     model_registry: ModelRegistry,
@@ -875,6 +961,14 @@ def render_report_tab(
     method_registry: TrainingMethodRegistry,
 ) -> None:
     st.subheader("Report Training")
+
+    _render_full_report_export_section(
+        dataset_registry=dataset_registry,
+        model_registry=model_registry,
+        augmentation_registry=augmentation_registry,
+        method_registry=method_registry,
+    )
+    st.divider()
 
     records = build_experiment_index(REPORT_ROOT)
     if not records:

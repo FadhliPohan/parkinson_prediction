@@ -628,3 +628,76 @@ Menambahkan input search/filter pada setiap tabel yang ditampilkan di dashboard 
 
 ### Next step
 1. Jika dibutuhkan, tambahkan opsi export CSV dari hasil filter aktif pada tiap tabel.
+
+## 2026-05-17  (Asia/Jakarta) - Sesi 17
+
+### Tujuan sesi
+Menambahkan fitur `Generate Report` di Streamlit untuk membuat laporan HTML lengkap, dinamis, dan siap print A4 otomatis.
+
+### Aktivitas yang sudah dilakukan
+1. Menambahkan modul baru `src/reporting/html_report.py` untuk menyusun laporan komprehensif berbasis artifact training yang tersimpan.
+2. Konten laporan HTML yang dihasilkan mencakup:
+   - kamus data + catatan non-IT (definisi istilah, method, augmentasi, metrik),
+   - ringkasan dataset lengkap (tabel + grafik distribusi original/split),
+   - ringkasan run terbaru per kombinasi,
+   - perbandingan eksperimen lengkap (method/model/augmentasi + ranking),
+   - ringkasan kesiapan prediksi (semua kandidat model/run),
+   - detail semua run (identitas, metrik, parameter, tabel CSV, summary.txt, dan seluruh gambar artifact run).
+3. Menambahkan tombol di `Training Report` pada `web/app.py`:
+   - `Generate Report Lengkap`,
+   - `Download HTML Report`,
+   - `Buka Laporan (Auto Print)`.
+4. Menambahkan dukungan print otomatis pada HTML:
+   - JavaScript `window.print()` saat halaman dibuka,
+   - CSS print `@page size: A4` + aturan page-break agar dokumen panjang menyesuaikan kertas.
+5. Menambahkan informasi ukuran file output report agar user bisa memperkirakan waktu buka/print.
+
+### Validasi yang dilakukan
+1. `python3 -m compileall -q web/app.py src/reporting/html_report.py` -> sukses.
+2. Smoke test startup Streamlit -> app berhasil start.
+3. Uji generator report via script -> file HTML berhasil dibuat pada `report/_exports/` dan berisi script auto print + style A4.
+
+### Keputusan
+1. Laporan HTML dibuat sebagai snapshot penuh seluruh data run tanpa filter agar cocok untuk kebutuhan audit/arsip.
+2. Gambar run di-embed ke HTML agar laporan tetap utuh saat dipindah ke perangkat lain.
+
+### Next step
+1. Jika ukuran file report terlalu besar, pertimbangkan mode tambahan `ringkas` (tanpa embed full image) dan `lengkap` (full embed).
+
+## 2026-05-17  (Asia/Jakarta) - Sesi 18
+
+### Tujuan sesi
+Mengimplementasikan mode `Report Ringkas` (ukuran lebih ringan) selain mode `Report Lengkap` pada fitur generate report HTML di Streamlit.
+
+### Aktivitas yang sudah dilakukan
+1. Mengupdate generator report `src/reporting/html_report.py`:
+   - menambahkan parameter `report_mode` dengan opsi:
+     - `full` (lengkap),
+     - `compact` (ringkas),
+   - menambahkan parameter `return_html` agar mode Streamlit tidak menyimpan string HTML besar di memori,
+   - menambahkan penamaan file output berbeda:
+     - `full_training_report_<timestamp>.html`,
+     - `compact_training_report_<timestamp>.html`,
+   - menambahkan metadata mode di bagian header laporan.
+2. Mengubah bagian detail run pada laporan:
+   - mode `full`: tetap embed seluruh gambar artifact run ke HTML,
+   - mode `compact`: tidak embed gambar artifact run; diganti daftar file visual + path agar ukuran report lebih kecil.
+3. Mengupdate UI `web/app.py`:
+   - menambahkan 2 tombol:
+     - `Generate Report Lengkap`,
+     - `Generate Report Ringkas`,
+   - menampilkan informasi output terakhir: path, mode, ukuran file.
+
+### Validasi yang dilakukan
+1. `python3 -m compileall -q web/app.py src/reporting/html_report.py` -> sukses.
+2. Generate report via script:
+   - mode `full`: ~91.16 MB,
+   - mode `compact`: ~1.98 MB.
+3. Smoke test Streamlit headless -> app berhasil start.
+
+### Keputusan
+1. Mode ringkas diposisikan sebagai default rekomendasi operasional untuk berbagi laporan cepat ke stakeholder non-teknis.
+2. Mode lengkap tetap dipertahankan untuk kebutuhan arsip/audit visual menyeluruh.
+
+### Next step
+1. Jika diperlukan, tambahkan pilihan “embed chart internal” pada mode ringkas agar file bisa diperkecil lagi.
