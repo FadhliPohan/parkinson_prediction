@@ -224,7 +224,7 @@ def ask_preprocessing_mode() -> str:
 
 def ask_on_existing_mode() -> str:
     options = [
-        "ask (tanya per kombinasi jika sudah pernah training)",
+        "ask (tanya sekali di awal jika ada kombinasi existing)",
         "retrain (langsung training ulang semua kombinasi yang sudah ada)",
         "skip (lewati kombinasi yang sudah pernah training)",
     ]

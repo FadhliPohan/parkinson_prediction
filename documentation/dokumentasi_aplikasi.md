@@ -4,7 +4,7 @@
 Aplikasi ini adalah pipeline machine learning klasifikasi gambar berbasis terminal + dashboard Streamlit.
 
 Fitur inti saat ini:
-1. Pemilihan dataset dinamis lewat config.
+1. Pemilihan dataset dinamis lewat folder `dataset/original` + override opsional lewat config.
 2. Pemilihan augmentasi dinamis lewat registry.
 3. Pemilihan model dinamis lewat registry.
 4. Pemilihan method training dinamis.
@@ -13,10 +13,16 @@ Fitur inti saat ini:
 7. Report training terstandar untuk dibaca dashboard.
 
 ## 2. Dataset yang Tersedia
-Berdasarkan `configs/datasets.yaml`:
-1. `parkinson_merder`
-2. `parkinson_mixing`
-3. `all` (opsi CLI untuk menjalankan semua dataset berurutan)
+Berdasarkan registry dinamis (`src/datasets/registry.py`):
+1. Dataset yang didefinisikan di `configs/datasets.yaml` (jika ada).
+2. Dataset hasil auto-discovery dari setiap subfolder pada `dataset/original`.
+3. `all` (opsi CLI untuk menjalankan semua dataset berurutan).
+
+Catatan:
+- Untuk cek daftar ID dataset aktif saat runtime:
+  ```bash
+  python3 -c "from src.datasets.registry import DatasetRegistry as R; r=R(); print('Default:', r.default_dataset); print('Datasets:', ', '.join(r.list_dataset_ids()))"
+  ```
 
 ## 3. Augmentasi Training yang Tersedia
 Berdasarkan `configs/augmentations.yaml`:
@@ -132,7 +138,7 @@ Catatan kompatibilitas:
 - Opsi `--model-families`:
   - memfilter model berdasarkan family (`cnn`, `transformer`, `yolo`, atau `all`).
 - Opsi `--on-existing`:
-  - `ask`: jika kombinasi sudah pernah training, user ditanya perlu retrain atau tidak.
+  - `ask`: jika ada kombinasi existing, user ditanya sekali di awal apakah semua kombinasi existing perlu diretrain.
   - `retrain`: langsung training ulang dan membuat run/model baru dengan timestamp training baru.
   - `skip`: kombinasi lama dilewati.
 - Opsi `--on-existing-split` (saat `--split-first` aktif):
@@ -203,9 +209,9 @@ File utama:
 ## 10. Menambah Komponen Baru
 
 ### A. Menambah Dataset
-1. Tambah entry di `configs/datasets.yaml`.
-2. Tambahkan `augmentation_options` bila perlu.
-3. Jalankan check dan split.
+1. Tambahkan folder dataset baru di `dataset/original/<nama_folder_dataset>`.
+2. Jalankan check/split; dataset baru akan otomatis muncul di registry.
+3. (Opsional) Tambahkan entry di `configs/datasets.yaml` jika butuh ID khusus, split dir khusus, atau override parameter dataset.
 
 ### B. Menambah Model
 1. Buat script model worker.

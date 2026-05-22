@@ -73,7 +73,7 @@ def _assert_split_balance(manifest, source_label: str) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Split dataset dinamis berbasis registry/config.")
-    parser.add_argument("--dataset", type=str, default=None, help="ID dataset dari configs/datasets.yaml")
+    parser.add_argument("--dataset", type=str, default=None, help="ID dataset dari registry (config + auto folder)")
     parser.add_argument("--dataset-dir", type=str, default=None, help="Override folder dataset original")
     parser.add_argument("--split-dir", type=str, default=None, help="Override folder output split")
     parser.add_argument("--seed", type=int, default=None, help="Override random seed")

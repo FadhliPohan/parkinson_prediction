@@ -17,7 +17,7 @@ from src.datasets.validator import discover_class_directories
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Cek distribusi dataset dari registry/config.")
-    parser.add_argument("--dataset", type=str, default=None, help="ID dataset dari configs/datasets.yaml")
+    parser.add_argument("--dataset", type=str, default=None, help="ID dataset dari registry (config + auto folder)")
     parser.add_argument("--dataset-dir", type=str, default=None, help="Override folder dataset original")
     parser.add_argument("--class-mode", type=str, default=None, choices=["direct", "recursive_leaf"])
     parser.add_argument("--save-plot", type=str, default=None, help="Path output gambar distribusi")

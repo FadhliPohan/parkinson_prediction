@@ -88,7 +88,7 @@ parkinson_prediction/
 ```
 
 ## 4. Alur Dataset
-1. Dataset dipilih dari `configs/datasets.yaml` melalui `DatasetRegistry`.
+1. Dataset dipilih dari `DatasetRegistry` (gabungan auto-discovery `dataset/original/*` + override opsional `configs/datasets.yaml`).
 2. Tiap dataset bisa menentukan `augmentation_options` yang diperbolehkan.
 3. Validasi kelas dilakukan oleh `src/datasets/validator.py` (`direct` atau `recursive_leaf`).
 4. `src/datasets/splitter.py` melakukan split dengan balancing kelas minoritas (rotasi kecil) bila perlu.
@@ -144,7 +144,7 @@ parkinson_prediction/
    - `dataset -> augmentasi -> method -> model`.
 4. Setiap kombinasi diberi `experiment_id` unik.
 5. Jika kombinasi sudah pernah ditraining:
-   - `ask` akan menanyakan konfirmasi training ulang,
+   - `ask` akan menanyakan konfirmasi training ulang sekali di awal workflow,
    - `retrain` langsung membuat run/model baru dengan timestamp baru,
    - `skip` melewati kombinasi tersebut.
 6. Jika `--split-first` dipakai, split existing bisa diputuskan:
@@ -189,9 +189,9 @@ parkinson_prediction/
 6. Tab prediksi memuat model dari `model_dir` yang direkam di manifest.
 
 ## 11. Menambah Dataset Baru
-1. Tambahkan entry dataset di `configs/datasets.yaml`.
-2. Isi minimal: `original_dir`, `split_dir`, `class_mode`, `split`, `seed`.
-3. Tambahkan `augmentation_options` jika ingin membatasi opsi augmentasi per dataset.
+1. Tambahkan folder baru di `dataset/original/<nama_folder_dataset>`.
+2. Jalankan check dan split (dataset otomatis muncul di registry).
+3. Opsional: tambah entry di `configs/datasets.yaml` jika ingin override `dataset_id`, `split_dir`, `class_mode`, atau parameter lain.
 4. Jalankan:
 ```bash
 python3 training/1.check_dataset.py --dataset <dataset_id>

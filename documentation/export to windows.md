@@ -63,6 +63,7 @@ python main.py
 ```
 
 ### B. Training langsung via CLI
+Ganti `parkinson_merder` dengan ID dataset yang muncul di registry.
 ```powershell
 python training\train.py --dataset parkinson_merder --models mobilenetv2 --method transfer_learning --on-existing ask
 ```
@@ -117,4 +118,3 @@ Lalu buka URL lokal dari output Streamlit (biasanya `http://localhost:8501`).
 2. Setelah stabil, naikkan ke pipeline full CNN/Transformer.
 3. Gunakan `--on-existing ask` supaya run lama tidak tertimpa tanpa sengaja.
 4. Aktifkan `--shutdown-on-finish` hanya saat kamu yakin job training sudah benar.
-

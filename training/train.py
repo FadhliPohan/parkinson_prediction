@@ -495,22 +495,90 @@ def _find_existing_runs(
     ]
 
 
-def _ask_retrain_for_existing_combo(
-    dataset_id: str,
-    augmentation_id: str,
-    method_id: str,
-    model_id: str,
-    latest_run_id: str,
-) -> bool:
+def _estimate_target_combo_counts(
+    dataset_ids: List[str],
+    dataset_registry: DatasetRegistry,
+    augmentation_registry: TrainingAugmentationRegistry,
+    selected_augmentation_ids: List[str],
+    method_ids: List[str],
+    model_cfgs: List[ModelConfig],
+    report_index: List[Dict[str, Any]],
+) -> Tuple[int, int]:
+    total_combos = 0
+    existing_combos = 0
+
+    for dataset_id in dataset_ids:
+        dataset_cfg = load_dataset(dataset_registry, dataset_id)
+        dataset_augmentations = augmentation_registry.resolve_for_dataset(dataset_cfg, selected_augmentation_ids)
+        if not dataset_augmentations:
+            continue
+
+        for augmentation_cfg in dataset_augmentations:
+            for method_id in method_ids:
+                for model_cfg in model_cfgs:
+                    total_combos += 1
+                    existing_runs = _find_existing_runs(
+                        report_index=report_index,
+                        dataset_id=dataset_cfg.dataset_id,
+                        augmentation_id=augmentation_cfg.augmentation_id,
+                        method_id=method_id,
+                        model_id=model_cfg.model_id,
+                    )
+                    if existing_runs:
+                        existing_combos += 1
+
+    return total_combos, existing_combos
+
+
+def _ask_global_retrain_confirmation(total_combos: int, existing_combos: int) -> bool:
     prompt = (
-        "\nKombinasi sudah pernah ditraining: "
-        f"dataset={dataset_id}, augmentasi={augmentation_id}, method={method_id}, model={model_id}\n"
-        f"Run terbaru: {latest_run_id}\n"
-        "Training ulang akan membuat run/model baru dengan tanggal training baru.\n"
-        "Lanjut training ulang? [y/N]: "
+        "\n[PERINGATAN] Ditemukan kombinasi existing yang sudah pernah ditraining.\n"
+        f"- Total kombinasi target : {total_combos}\n"
+        f"- Kombinasi existing     : {existing_combos}\n"
+        "Anda akan melakukan training ulang untuk kombinasi existing.\n"
+        "Pointer model terbaru akan berubah ke run baru, tetapi run/model lama tetap disimpan sebagai histori.\n"
+        "Lanjutkan training ulang? [y/N]: "
     )
     answer = input(prompt).strip().lower()
     return answer in {"y", "yes"}
+
+
+def _resolve_on_existing_once(
+    requested_mode: str,
+    total_combos: int,
+    existing_combos: int,
+) -> str:
+    if existing_combos <= 0:
+        return requested_mode
+
+    print(
+        "\n[INFO] Histori model aktif: setiap training ulang membuat run_id baru, "
+        "run lama tidak dihapus."
+    )
+
+    if requested_mode == "skip":
+        print("[INFO] `--on-existing skip` aktif. Semua kombinasi existing akan dilewati.")
+        return "skip"
+
+    if not sys.stdin.isatty():
+        if requested_mode == "ask":
+            print(
+                "[INFO] Mode `ask` tidak bisa konfirmasi pada sesi non-interaktif. "
+                "Kombinasi existing akan dilewati (setara `skip`)."
+            )
+            return "skip"
+        print("[INFO] `--on-existing retrain` aktif pada sesi non-interaktif. Lanjut retrain.")
+        return "retrain"
+
+    confirmed = _ask_global_retrain_confirmation(total_combos=total_combos, existing_combos=existing_combos)
+    if confirmed:
+        return "retrain"
+
+    if requested_mode == "retrain":
+        raise SystemExit("Training dibatalkan oleh user sebelum retrain dijalankan.")
+
+    print("[INFO] User menolak retrain. Kombinasi existing akan dilewati (setara `skip`).")
+    return "skip"
 
 
 def _should_run_combo(
@@ -541,21 +609,13 @@ def _should_run_combo(
         )
         return False
 
-    if not sys.stdin.isatty():
-        print(
-            "[SKIP] Kombinasi sudah pernah ditraining, tetapi sesi non-interaktif "
-            "tidak bisa meminta konfirmasi retrain. "
-            "Gunakan `--on-existing retrain` jika ingin memaksa training ulang."
-        )
-        return False
-
-    return _ask_retrain_for_existing_combo(
-        dataset_id=dataset_id,
-        augmentation_id=augmentation_id,
-        method_id=method_id,
-        model_id=model_id,
-        latest_run_id=latest_run_id,
+    # Mode `ask` sudah ditangani sekali di awal workflow.
+    print(
+        "[SKIP] Kombinasi existing dilewati karena mode `ask` diproses sekali di awal. "
+        "Run terbaru:",
+        latest_run_id,
     )
+    return False
 
 
 def save_result(results: List[Dict[str, Any]], result: Dict[str, Any]) -> None:
@@ -622,7 +682,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dataset",
         type=str,
         default=None,
-        help="ID dataset dari configs/datasets.yaml, daftar dipisah koma, atau 'all'.",
+        help="ID dataset dari registry (config + auto folder), daftar dipisah koma, atau 'all'.",
     )
     parser.add_argument(
         "--method",
@@ -668,7 +728,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default="ask",
         choices=list(ON_EXISTING_CHOICES),
-        help="Perilaku jika kombinasi dataset+augmentasi+method+model sudah pernah ditraining: ask, retrain, atau skip.",
+        help="Perilaku jika kombinasi dataset+augmentasi+method+model sudah pernah ditraining: ask (konfirmasi sekali di awal), retrain, atau skip.",
     )
     parser.add_argument(
         "--on-existing-split",
@@ -760,6 +820,30 @@ def main() -> None:
         print("\n[INFO] Ditemukan {} run historis pada folder report.".format(len(report_index)))
     else:
         print("\n[INFO] Belum ada run historis pada folder report.")
+
+    total_target_combos, existing_target_combos = _estimate_target_combo_counts(
+        dataset_ids=dataset_ids,
+        dataset_registry=dataset_registry,
+        augmentation_registry=augmentation_registry,
+        selected_augmentation_ids=selected_augmentation_ids,
+        method_ids=method_ids,
+        model_cfgs=model_cfgs,
+        report_index=report_index,
+    )
+    effective_on_existing = _resolve_on_existing_once(
+        requested_mode=args.on_existing,
+        total_combos=total_target_combos,
+        existing_combos=existing_target_combos,
+    )
+    if effective_on_existing != args.on_existing:
+        print(
+            "[INFO] Mode on-existing efektif: '{}' -> '{}'".format(
+                args.on_existing,
+                effective_on_existing,
+            )
+        )
+    else:
+        print("[INFO] Mode on-existing efektif:", effective_on_existing)
 
     for dataset_id in dataset_ids:
         dataset_cfg = load_dataset(dataset_registry, dataset_id)
@@ -878,7 +962,7 @@ def main() -> None:
                         model_id=model_cfg.model_id,
                     )
                     should_run = _should_run_combo(
-                        on_existing=args.on_existing,
+                        on_existing=effective_on_existing,
                         existing_runs=existing_runs,
                         dataset_id=dataset_cfg.dataset_id,
                         augmentation_id=augmentation_cfg.augmentation_id,

@@ -10,8 +10,9 @@ Fokus dokumen:
 
 ## 2. Konteks Sistem Saat Ini
 1. Dataset aktif:
-   - `parkinson_merder`
-   - `parkinson_mixing`
+   - Berasal dari registry dinamis:
+     - hasil auto-discovery semua subfolder `dataset/original/*`,
+     - ditambah/di-override entry opsional dari `configs/datasets.yaml`.
 2. Augmentasi aktif:
    - `no_augment`
    - `augment_on_the_fly`
@@ -147,7 +148,7 @@ Aktivitas:
 6. Orchestrator mengeksekusi kombinasi secara independen.
 7. Setiap kombinasi punya `experiment_id` unik.
 8. Jika kombinasi sudah pernah ditraining, sistem akan menangani sesuai mode `on-existing`:
-   - `ask`: tanya user apakah perlu training ulang,
+   - `ask`: tanya user sekali di awal apakah semua kombinasi existing perlu training ulang,
    - `retrain`: langsung training ulang,
    - `skip`: lewati kombinasi lama.
 9. User bisa memfilter family model lewat opsi `model-families` (contoh: `cnn`, `transformer`).
@@ -202,7 +203,7 @@ Setelah command dieksekusi:
    - model loop.
 10. Cek apakah kombinasi sudah punya run sebelumnya.
 11. Jika run sudah ada:
-   - mode `ask` akan meminta konfirmasi retrain,
+   - mode `ask` akan meminta konfirmasi retrain sekali di awal workflow,
    - mode `retrain` akan membuat run/model baru dengan timestamp training baru,
    - mode `skip` akan melewati kombinasi lama.
 12. Simpan hasil run per kombinasi.
@@ -343,7 +344,8 @@ trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
 1. Error dependency:
    - Jalankan Pipeline 1 ulang.
 2. Dataset tidak ditemukan:
-   - Cek `configs/datasets.yaml`.
+   - Cek apakah folder dataset ada di `dataset/original`.
+   - Jika pakai ID custom, cek mapping di `configs/datasets.yaml`.
 3. Augmentasi tidak valid:
    - Cek `configs/augmentations.yaml` dan `augmentation_options` dataset.
 4. Dashboard kosong:
