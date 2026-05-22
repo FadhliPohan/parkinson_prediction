@@ -196,19 +196,23 @@ Setelah command dieksekusi:
 8. Validasi split balance dilakukan sebelum training:
    - cek balance total per class sesudah balancing,
    - cek balance per split `train/testing/validation`.
-9. Eksekusi loop kombinasi:
+9. Kebijakan pembagian jumlah data split:
+   - default rasio `80:10:10`,
+   - `testing` dan `validation` harus sama,
+   - sisa pembulatan masuk ke `train`.
+10. Eksekusi loop kombinasi:
    - dataset loop,
    - augmentasi loop,
    - method loop,
    - model loop.
-10. Cek apakah kombinasi sudah punya run sebelumnya.
-11. Jika run sudah ada:
+11. Cek apakah kombinasi sudah punya run sebelumnya.
+12. Jika run sudah ada:
    - mode `ask` akan meminta konfirmasi retrain sekali di awal workflow,
    - mode `retrain` akan membuat run/model baru dengan timestamp training baru,
    - mode `skip` akan melewati kombinasi lama.
-12. Simpan hasil run per kombinasi.
-13. Ringkasan workflow juga menyimpan `epochs`, `batch_size`, dan `fine_tune_epochs` per kombinasi.
-14. Jika `--shutdown-on-finish` aktif, sistem menjalankan perintah shutdown OS setelah workflow selesai.
+13. Simpan hasil run per kombinasi.
+14. Ringkasan workflow juga menyimpan `epochs`, `batch_size`, dan `fine_tune_epochs` per kombinasi.
+15. Jika `--shutdown-on-finish` aktif, sistem menjalankan perintah shutdown OS setelah workflow selesai.
 
 ## 7. Contoh Command
 

@@ -34,7 +34,7 @@ class DatasetConfig:
 DEFAULT_CLASS_MODE = "direct"
 DEFAULT_SEED = 42
 DEFAULT_VALID_EXTENSIONS = [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"]
-DEFAULT_SPLIT_CFG = {"train": 0.70, "testing": 0.15, "validation": 0.15}
+DEFAULT_SPLIT_CFG = {"train": 0.80, "testing": 0.10, "validation": 0.10}
 DEFAULT_RESIZE_CFG = {"train": [224, 224], "testing": None, "validation": None}
 DEFAULT_AUGMENTATIONS = ["no_augment", "augment_on_the_fly"]
 

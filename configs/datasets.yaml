@@ -8,9 +8,9 @@ defaults:
   seed: 42
   valid_extensions: [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"]
   split:
-    train: 0.70
-    testing: 0.15
-    validation: 0.15
+    train: 0.80
+    testing: 0.10
+    validation: 0.10
   resize:
     train: [224, 224]
     testing: null

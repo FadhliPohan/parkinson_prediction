@@ -67,6 +67,10 @@ Balancing dilakukan di tahap split (`src/datasets/splitter.py`):
 Catatan:
 - Balancing membuat file hasil augmentasi di area split (bukan mengubah dataset original).
 - Detail balancing tercatat di `_metadata/split_manifest.json`.
+- Kebijakan split saat ini:
+  - rasio default `80:10:10` (train:testing:validation),
+  - `testing` dan `validation` harus sama per kelas,
+  - sisa pembulatan otomatis dimasukkan ke `train` (contoh 101 data -> 81/10/10).
 
 ## 7. Menjalankan Aplikasi
 

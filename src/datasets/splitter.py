@@ -173,10 +173,31 @@ def _build_balanced_samples(
     return samples_per_class, balancing_manifest
 
 
-def _compute_split_indices(total_count: int, train_ratio: float, test_ratio: float) -> Tuple[int, int]:
-    train_count = int(total_count * train_ratio)
-    test_count = int(total_count * test_ratio)
-    return train_count, test_count
+def _compute_split_counts(
+    total_count: int,
+    train_ratio: float,
+    test_ratio: float,
+    validation_ratio: float,
+) -> Tuple[int, int, int]:
+    # Kebijakan split proyek saat ini:
+    # - testing dan validation harus sama besar.
+    # - sisa pembulatan selalu masuk ke train.
+    if abs(float(test_ratio) - float(validation_ratio)) > 1e-9:
+        raise ValueError(
+            "Rasio testing dan validation harus sama agar jumlah data split simetris "
+            "(contoh: 80:10:10)."
+        )
+
+    holdout_count = int(total_count * test_ratio)
+    test_count = holdout_count
+    validation_count = holdout_count
+    train_count = int(total_count) - test_count - validation_count
+    if train_count < 0:
+        raise ValueError(
+            "Konfigurasi split tidak valid: train negatif. "
+            "Periksa rasio split pada konfigurasi dataset."
+        )
+    return train_count, test_count, validation_count
 
 
 def _is_uniform_count_map(count_map: Dict[str, object]) -> bool:
@@ -209,17 +230,21 @@ def validate_balanced_split_manifest(manifest: Dict[str, object]) -> Dict[str, o
     if not isinstance(validation_map, dict):
         validation_map = {}
 
+    testing_equals_validation = bool(test_map and validation_map and test_map == validation_map)
+
     validation_result = {
         "after_counts_balanced": _is_uniform_count_map(after_counts),
         "train_balanced": _is_uniform_count_map(train_map),
         "testing_balanced": _is_uniform_count_map(test_map),
         "validation_balanced": _is_uniform_count_map(validation_map),
+        "testing_equals_validation": testing_equals_validation,
     }
     validation_result["is_balanced"] = bool(
         validation_result["after_counts_balanced"]
         and validation_result["train_balanced"]
         and validation_result["testing_balanced"]
         and validation_result["validation_balanced"]
+        and validation_result["testing_equals_validation"]
     )
     return validation_result
 
@@ -239,7 +264,7 @@ def split_dataset(
         extensions=extensions,
     )
 
-    train_ratio, test_ratio, _validation_ratio = _ensure_valid_ratios(split_cfg)
+    train_ratio, test_ratio, validation_ratio = _ensure_valid_ratios(split_cfg)
     train_resize = _parse_resize(resize_cfg.get("train"))
     test_resize = _parse_resize(resize_cfg.get("testing"))
     validation_resize = _parse_resize(resize_cfg.get("validation"))
@@ -279,14 +304,15 @@ def split_dataset(
         shuffled = samples[:]
         rng.shuffle(shuffled)
 
-        train_count, test_count = _compute_split_indices(
+        train_count, test_count, validation_count = _compute_split_counts(
             total_count=len(shuffled),
             train_ratio=train_ratio,
             test_ratio=test_ratio,
+            validation_ratio=validation_ratio,
         )
         train_samples = shuffled[:train_count]
         test_samples = shuffled[train_count : train_count + test_count]
-        validation_samples = shuffled[train_count + test_count :]
+        validation_samples = shuffled[train_count + test_count : train_count + test_count + validation_count]
 
         augmented_train_count = sum(1 for sample in train_samples if sample.is_augmented)
         augmented_test_count = sum(1 for sample in test_samples if sample.is_augmented)
@@ -352,7 +378,7 @@ def split_dataset(
         "split_ratio": {
             "train": train_ratio,
             "testing": test_ratio,
-            "validation": 1.0 - train_ratio - test_ratio,
+            "validation": validation_ratio,
         },
         "classes": class_manifest,
         "split_stats": split_stats,
