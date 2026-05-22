@@ -14,6 +14,7 @@ class ModelConfig:
     script_path: str
     framework: str
     preprocess_key: str
+    family: str = "other"
     enabled: bool = True
 
     @property
@@ -36,6 +37,7 @@ class ModelRegistry:
                 script_path=str(item.get("script_path", "")),
                 framework=str(item.get("framework", "tensorflow")),
                 preprocess_key=str(item.get("preprocess_key", "")),
+                family=str(item.get("family", "other")).strip().lower() or "other",
                 enabled=bool(item.get("enabled", True)),
             )
             self._models[model_id] = model_cfg
@@ -56,3 +58,19 @@ class ModelRegistry:
 
     def list_models(self, enabled_only: bool = True) -> List[ModelConfig]:
         return [self._models[mid] for mid in self.list_model_ids(enabled_only=enabled_only)]
+
+    def list_family_ids(self, enabled_only: bool = True) -> List[str]:
+        families = {
+            cfg.family
+            for cfg in self.list_models(enabled_only=enabled_only)
+            if str(cfg.family).strip()
+        }
+        return sorted(families)
+
+    def list_model_ids_by_family(self, family_id: str, enabled_only: bool = True) -> List[str]:
+        family_normalized = str(family_id).strip().lower()
+        return sorted(
+            cfg.model_id
+            for cfg in self.list_models(enabled_only=enabled_only)
+            if str(cfg.family).strip().lower() == family_normalized
+        )

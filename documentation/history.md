@@ -701,3 +701,55 @@ Mengimplementasikan mode `Report Ringkas` (ukuran lebih ringan) selain mode `Rep
 
 ### Next step
 1. Jika diperlukan, tambahkan pilihan “embed chart internal” pada mode ringkas agar file bisa diperkecil lagi.
+
+## 2026-05-22  (Asia/Jakarta) - Sesi 6
+
+### Tujuan sesi
+Menambah pipeline penuh berbasis family model (CNN dan Transformer), menambah opsi auto-shutdown setelah training selesai, memperkuat kompatibilitas Windows, dan memperbarui dokumentasi.
+
+### Aktivitas yang sudah dilakukan
+1. Membaca ulang dokumentasi aktif (`architecture.md`, `arsitectur.md`, `pipeline.md`, `dokumentasi_aplikasi.md`, `requirements.md`) sebelum perubahan kode.
+2. Analisis alur orkestrator `training/train.py`, menu terminal `main.py`, registry model/method/augmentasi, dan runtime environment.
+3. Menambah metadata `family` pada `configs/models.yaml`:
+   - `cnn`
+   - `transformer`
+   - `yolo`
+4. Mengembangkan `src/models/registry.py`:
+   - field `family` pada `ModelConfig`,
+   - helper `list_family_ids()`,
+   - helper `list_model_ids_by_family()`.
+5. Menambah kemampuan filter family model di `training/train.py`:
+   - argumen baru `--model-families`,
+   - resolver model berdasarkan kombinasi `--models` + `--model-families`.
+6. Menambah opsi auto-shutdown di `training/train.py`:
+   - argumen baru `--shutdown-on-finish`,
+   - perintah shutdown lintas OS (Windows/Linux).
+7. Menambah menu pipeline baru di `main.py`:
+   - Pipeline 11: pipeline penuh model CNN,
+   - Pipeline 12: pipeline penuh model Transformer.
+8. Menambah prompt auto-shutdown pada alur training menu `main.py`.
+9. Menambah dukungan pass-through `--model-families` dan `--shutdown-on-finish` dari menu ke orchestrator.
+10. Perbaikan kompatibilitas lintas OS pada `src/utils/runtime.py`:
+    - gunakan `os.pathsep` untuk pemrosesan `PYTHONPATH` dan path library.
+11. Update dokumentasi:
+    - `documentation/pipeline.md`
+    - `documentation/dokumentasi_aplikasi.md`
+    - `documentation/architecture.md`
+    - sinkronisasi mirror `documentation/arsitectur.md`
+12. Menambah dokumen panduan Windows:
+    - `documentation/export to windows.md`
+
+### Temuan penting
+1. Fondasi project sudah modular dan siap menerima pipeline berbasis family tanpa perubahan besar pada runner model.
+2. Untuk kompatibilitas Windows, masalah paling potensial ada di dependency deep learning (terutama TensorFlow GPU), bukan pada desain pipeline CLI.
+3. `os.pathsep` wajib dipakai agar `PYTHONPATH` lintas OS tidak rusak.
+
+### Keputusan
+1. Menjaga backward compatibility: command lama tetap berjalan tanpa `--model-families`.
+2. Pipeline CNN/Transformer diimplementasikan sebagai filter pada registry model, bukan hard-code daftar model di banyak tempat.
+3. Auto-shutdown dibuat opt-in (`--shutdown-on-finish`) agar aman secara operasional.
+
+### Next step
+1. Jalankan smoke test training ringan (1 model) untuk verifikasi integrasi runtime nyata.
+2. Jalankan pipeline 11/12 di lingkungan target (Linux/Windows/WSL) sesuai resource GPU.
+3. Jika dibutuhkan, tambahkan mode shutdown bertahap (mis. delay atau success-only) untuk kontrol operasional lebih detail.

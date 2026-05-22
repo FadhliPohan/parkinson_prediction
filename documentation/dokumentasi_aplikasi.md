@@ -35,17 +35,20 @@ Berdasarkan `configs/training_methods.yaml`:
 
 ## 5. Model yang Tersedia
 Berdasarkan `configs/models.yaml`:
-1. `mobilenetv2`
-2. `resnet50`
-3. `vgg19`
-4. `resnet152`
-5. `inception_googlenet`
-6. `efficientnet`
-7. `densenet121`
-8. `vit`
-9. `swintransformer`
-10. `deit`
-11. `yolov8`
+1. Family `cnn`:
+   - `mobilenetv2`
+   - `resnet50`
+   - `vgg19`
+   - `resnet152`
+   - `inception_googlenet`
+   - `efficientnet`
+   - `densenet121`
+2. Family `transformer`:
+   - `vit`
+   - `swintransformer`
+   - `deit`
+3. Family `yolo`:
+   - `yolov8`
 
 ## 6. Mekanisme Balancing Dataset
 Balancing dilakukan di tahap split (`src/datasets/splitter.py`):
@@ -102,8 +105,32 @@ python3 training/train.py \
   --on-existing ask
 ```
 
+Contoh pipeline khusus CNN:
+```bash
+python3 training/train.py \
+  --dataset parkinson_merder \
+  --models all \
+  --model-families cnn \
+  --all-methods \
+  --split-first \
+  --on-existing ask
+```
+
+Contoh pipeline khusus Transformer:
+```bash
+python3 training/train.py \
+  --dataset parkinson_merder \
+  --models all \
+  --model-families transformer \
+  --all-methods \
+  --split-first \
+  --on-existing ask
+```
+
 Catatan kompatibilitas:
 - Opsi lama `--preprocessing-mode augment|no_augment|both` masih didukung.
+- Opsi `--model-families`:
+  - memfilter model berdasarkan family (`cnn`, `transformer`, `yolo`, atau `all`).
 - Opsi `--on-existing`:
   - `ask`: jika kombinasi sudah pernah training, user ditanya perlu retrain atau tidak.
   - `retrain`: langsung training ulang dan membuat run/model baru dengan timestamp training baru.
@@ -115,10 +142,13 @@ Catatan kompatibilitas:
 - Opsi `--method-overrides-json`:
   - mengatur runtime config per method (`epochs`, `batch_size`, `fine_tune_epochs`) dalam satu command.
   - contoh JSON: `{"baseline":{"epochs":10,"batch_size":16,"fine_tune_epochs":0}}`.
+- Opsi `--shutdown-on-finish`:
+  - setelah workflow training selesai, perangkat otomatis menjalankan perintah shutdown OS.
 - Jika menjalankan dari menu `main.py`, user akan ditanya di awal untuk setiap method:
   - `Epoch stage-1`,
   - `Batch size`,
   - `Fine-tune epochs`.
+  - opsi auto-shutdown setelah training selesai.
 
 ### E. Dashboard Streamlit
 ```bash
@@ -180,7 +210,8 @@ File utama:
 ### B. Menambah Model
 1. Buat script model worker.
 2. Tambahkan ke `configs/models.yaml`.
-3. Pastikan `enabled: true` jika ingin muncul di menu/CLI.
+3. Isi `family` agar bisa dipakai pipeline khusus family model (`cnn`, `transformer`, `yolo`, atau custom).
+4. Pastikan `enabled: true` jika ingin muncul di menu/CLI.
 
 ### C. Menambah Method Training
 1. Tambah method di `configs/training_methods.yaml`.
@@ -196,3 +227,4 @@ File utama:
 3. Jika split dijalankan ulang, isi folder split lama akan ditimpa hasil split terbaru.
 4. Jika kombinasi eksperimen sangat banyak, jalankan batch bertahap agar mudah dianalisis.
 5. Sebelum training berjalan, pipeline memvalidasi split balance (after_counts + train/testing/validation) agar kelas tetap seimbang.
+6. Untuk job panjang semalaman, gunakan `--shutdown-on-finish` jika ingin perangkat mati otomatis saat workflow selesai.

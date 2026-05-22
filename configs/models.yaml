@@ -4,6 +4,7 @@ models:
     script_path: "model/legacy_or_wrappers/mobilenetv2.py"
     framework: "tensorflow"
     preprocess_key: "mobilenetv2"
+    family: "cnn"
     enabled: true
 
   resnet50:
@@ -11,6 +12,7 @@ models:
     script_path: "model/legacy_or_wrappers/resnet50.py"
     framework: "tensorflow"
     preprocess_key: "resnet50"
+    family: "cnn"
     enabled: true
 
   vgg19:
@@ -18,6 +20,7 @@ models:
     script_path: "model/legacy_or_wrappers/vgg19.py"
     framework: "tensorflow"
     preprocess_key: "vgg19"
+    family: "cnn"
     enabled: true
 
   resnet152:
@@ -25,6 +28,7 @@ models:
     script_path: "model/legacy_or_wrappers/resnet152.py"
     framework: "tensorflow"
     preprocess_key: "resnet152"
+    family: "cnn"
     enabled: true
 
   inception_googlenet:
@@ -32,6 +36,7 @@ models:
     script_path: "model/legacy_or_wrappers/inception_googlenet.py"
     framework: "tensorflow"
     preprocess_key: "inception_googlenet"
+    family: "cnn"
     enabled: true
 
   efficientnet:
@@ -39,6 +44,7 @@ models:
     script_path: "model/legacy_or_wrappers/efficientnet.py"
     framework: "tensorflow"
     preprocess_key: "efficientnet"
+    family: "cnn"
     enabled: true
 
   densenet121:
@@ -46,6 +52,7 @@ models:
     script_path: "model/legacy_or_wrappers/densenet121.py"
     framework: "tensorflow"
     preprocess_key: "densenet121"
+    family: "cnn"
     enabled: true
 
   vit:
@@ -53,6 +60,7 @@ models:
     script_path: "model/legacy_or_wrappers/vit.py"
     framework: "tensorflow"
     preprocess_key: "transformer"
+    family: "transformer"
     enabled: true
 
   swintransformer:
@@ -60,6 +68,7 @@ models:
     script_path: "model/legacy_or_wrappers/swintransformer.py"
     framework: "tensorflow"
     preprocess_key: "transformer"
+    family: "transformer"
     enabled: true
 
   deit:
@@ -67,6 +76,7 @@ models:
     script_path: "model/legacy_or_wrappers/deit.py"
     framework: "tensorflow"
     preprocess_key: "transformer"
+    family: "transformer"
     enabled: true
 
   yolov8:
@@ -74,4 +84,5 @@ models:
     script_path: "model/legacy_or_wrappers/yolov8.py"
     framework: "yolo"
     preprocess_key: "yolo"
+    family: "yolo"
     enabled: true

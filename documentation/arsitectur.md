@@ -12,7 +12,7 @@ Komponen utama sistem:
 1. `configs/*.yaml` sebagai sumber konfigurasi.
 2. `src/` sebagai backend modular (dataset, model, training, reporting, inference, utils).
 3. `training/train.py` sebagai orchestrator CLI kombinatorial.
-4. `main.py` sebagai menu terminal dinamis (pipeline 1-10).
+4. `main.py` sebagai menu terminal dinamis (pipeline 1-12).
 5. `web/app.py` sebagai dashboard pembaca report/model.
 
 ## 3. Struktur Folder
@@ -106,8 +106,12 @@ parkinson_prediction/
 
 ## 6. Model Registry
 1. Model terdaftar di `configs/models.yaml`.
-2. `src/models/registry.py` memuat metadata model (`framework`, `script_path`, `preprocess_key`, `enabled`).
+2. `src/models/registry.py` memuat metadata model (`framework`, `script_path`, `preprocess_key`, `family`, `enabled`).
 3. Menambah model baru cukup tambah config + worker script.
+4. Family model dipakai untuk pipeline tersegmentasi:
+   - `cnn`
+   - `transformer`
+   - `yolo`
 
 ## 7. Method Registry dan Training Strategy
 1. Method training terdaftar di `configs/training_methods.yaml`.
@@ -130,8 +134,10 @@ parkinson_prediction/
    - `--augmentations` (single, multi CSV, atau `all`)
    - `--method` (single, multi CSV, atau `all`) atau `--all-methods`
    - `--models` (single, multi CSV, atau `all`)
+   - `--model-families` (single, multi CSV, atau `all`)
    - `--method-overrides-json` (override runtime per method)
    - `--check-first`, `--split-first`, `--augment-info`
+   - `--shutdown-on-finish`
    - `--on-existing {ask,retrain,skip}`
    - `--on-existing-split {ask,resplit,skip}`
 3. Orchestrator mengeksekusi kombinasi terpisah dengan urutan:
@@ -148,6 +154,8 @@ parkinson_prediction/
 7. Validasi balance split dilakukan sebelum training (after_counts + train/testing/validation).
 8. Training didispatch ke runner framework melalui `src/training/trainer.py`.
 9. `main.py` menanyakan konfigurasi runtime per method di awal (epoch/batch/fine-tune), lalu meneruskannya ke orchestrator.
+10. `main.py` menyediakan pipeline penuh khusus family `cnn` dan family `transformer`.
+11. Jika opsi shutdown diaktifkan, orchestrator menjalankan perintah shutdown OS setelah workflow selesai.
 
 ## 9. Artifact Report dan Model
 1. Report disimpan ke `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.
@@ -197,6 +205,7 @@ python3 training/2.split_data_testing.py --dataset <dataset_id>
    - `script_path`
    - `framework`
    - `preprocess_key`
+   - `family` (`cnn` / `transformer` / `yolo` / custom)
    - `enabled`
 
 ## 13. Menambah Method Training Baru

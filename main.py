@@ -160,6 +160,13 @@ def ask_runtime_toggles() -> Dict[str, bool]:
     }
 
 
+def ask_shutdown_on_finish() -> bool:
+    return ask_yes_no(
+        "Aktifkan auto-shutdown perangkat setelah workflow training selesai?",
+        False,
+    )
+
+
 def ask_csv_or_all(prompt: str, options: List[str], default: str = "all") -> str:
     print("\nOpsi tersedia:")
     for idx, option in enumerate(options, start=1):
@@ -265,8 +272,10 @@ def build_train_command(
     on_existing: str = "ask",
     on_existing_split: str = "ask",
     method_overrides: Optional[Dict[str, Dict[str, int]]] = None,
+    model_families: Optional[str] = None,
     mixed_precision: bool = False,
     disable_cpu_fallback: bool = False,
+    shutdown_on_finish: bool = False,
 ) -> List[str]:
     train_script = _resolve_script("train.py")
     command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
@@ -277,6 +286,8 @@ def build_train_command(
 
     if method_id:
         command.extend(["--method", method_id])
+    if model_families:
+        command.extend(["--model-families", model_families])
     if all_methods:
         command.append("--all-methods")
     if check_first:
@@ -296,6 +307,9 @@ def build_train_command(
 
     if disable_cpu_fallback:
         command.append("--disable-cpu-fallback")
+
+    if shutdown_on_finish:
+        command.append("--shutdown-on-finish")
 
     return command
 
@@ -349,6 +363,8 @@ def print_menu() -> None:
     print("8. Pipeline penuh (check -> split -> augment -> train all models)")
     print("9. Jalankan dashboard Streamlit")
     print("10. Workflow training fleksibel (multi dataset/augmentasi/method/model)")
+    print("11. Pipeline penuh model CNN")
+    print("12. Pipeline penuh model Transformer")
     print("0. Keluar")
 
 
@@ -360,6 +376,7 @@ def main() -> None:
         augmentation_registry = TrainingAugmentationRegistry()
 
         model_ids = model_registry.list_model_ids(enabled_only=True)
+        family_ids = model_registry.list_family_ids(enabled_only=True)
         method_ids = method_registry.list_method_ids()
         augmentation_ids = augmentation_registry.list_augmentation_ids()
 
@@ -376,7 +393,7 @@ def main() -> None:
 
         selected_dataset = ""
         target_datasets: List[str] = []
-        if choice in {"2", "3", "4", "5", "6", "7", "8"}:
+        if choice in {"2", "3", "4", "5", "6", "7", "8", "11", "12"}:
             selected_dataset = ask_dataset_target(dataset_registry)
             target_datasets = resolve_dataset_targets(dataset_registry, selected_dataset)
 
@@ -410,6 +427,7 @@ def main() -> None:
                 method_overrides=method_overrides,
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
+                shutdown_on_finish=ask_shutdown_on_finish(),
             )
             run_command(command)
         elif choice == "6":
@@ -430,6 +448,7 @@ def main() -> None:
                 method_overrides=method_overrides,
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
+                shutdown_on_finish=ask_shutdown_on_finish(),
             )
             run_command(command)
         elif choice == "7":
@@ -449,6 +468,7 @@ def main() -> None:
                 method_overrides=method_overrides,
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
+                shutdown_on_finish=ask_shutdown_on_finish(),
             )
             run_command(command)
         elif choice == "8":
@@ -482,6 +502,7 @@ def main() -> None:
                 method_overrides=method_overrides,
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
+                shutdown_on_finish=ask_shutdown_on_finish(),
             )
             run_command(command)
         elif choice == "9":
@@ -507,6 +528,11 @@ def main() -> None:
                 model_ids,
                 default="all",
             )
+            model_families_arg = ask_csv_or_all(
+                "Pilih family model (opsional)",
+                family_ids,
+                default="all",
+            )
             selected_method_ids = _parse_csv_selection(methods_arg, method_ids)
             method_overrides = ask_method_runtime_overrides(selected_method_ids)
             on_existing_mode = ask_on_existing_mode()
@@ -529,8 +555,51 @@ def main() -> None:
                 on_existing=on_existing_mode,
                 on_existing_split=on_existing_split_mode,
                 method_overrides=method_overrides,
+                model_families=model_families_arg,
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
+                shutdown_on_finish=ask_shutdown_on_finish(),
+            )
+            run_command(command)
+        elif choice in {"11", "12"}:
+            target_family = "cnn" if choice == "11" else "transformer"
+            if target_family not in family_ids:
+                print(f"Family model '{target_family}' tidak tersedia di registry.")
+                continue
+
+            use_all_methods = ask_yes_no("Gunakan semua method training?", True)
+            if use_all_methods:
+                method_id = None
+                selected_method_ids = method_ids
+            else:
+                method_id = ask_choice(
+                    "Pilih method",
+                    method_ids,
+                    default_index=method_ids.index(method_registry.default_method),
+                )
+                selected_method_ids = [method_id]
+
+            on_existing_split_mode = ask_on_existing_split_mode()
+            on_existing_mode = ask_on_existing_mode()
+            method_overrides = ask_method_runtime_overrides(selected_method_ids)
+            runtime_toggles = ask_runtime_toggles()
+
+            command = build_train_command(
+                dataset_id=selected_dataset,
+                models="all",
+                method_id=method_id,
+                all_methods=use_all_methods,
+                check_first=True,
+                split_first=True,
+                augment_info=True,
+                preprocessing_mode=ask_preprocessing_mode(),
+                on_existing=on_existing_mode,
+                on_existing_split=on_existing_split_mode,
+                method_overrides=method_overrides,
+                model_families=target_family,
+                mixed_precision=runtime_toggles["mixed_precision"],
+                disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
+                shutdown_on_finish=ask_shutdown_on_finish(),
             )
             run_command(command)
         else:

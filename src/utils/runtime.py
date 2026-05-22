@@ -13,6 +13,7 @@ VENV_DIR = PROJECT_ROOT / ".venv"
 def build_runtime_env() -> dict:
     env = os.environ.copy()
     lib_dirs: List[str] = []
+    pathsep = os.pathsep
 
     nvidia_root_candidates = sorted((VENV_DIR / "lib").glob("python*/site-packages/nvidia"))
     for nvidia_root in nvidia_root_candidates:
@@ -22,17 +23,17 @@ def build_runtime_env() -> dict:
 
     if lib_dirs:
         current_ld_path = env.get("LD_LIBRARY_PATH", "")
-        prefix = ":".join(lib_dirs)
-        env["LD_LIBRARY_PATH"] = f"{prefix}:{current_ld_path}" if current_ld_path else prefix
+        prefix = pathsep.join(lib_dirs)
+        env["LD_LIBRARY_PATH"] = f"{prefix}{pathsep}{current_ld_path}" if current_ld_path else prefix
 
     # Pastikan subprocess dari subfolder (mis. training/, model/legacy_or_wrappers/)
     # tetap bisa mengimpor paket internal `src`.
     project_root = str(PROJECT_ROOT)
     current_pythonpath = env.get("PYTHONPATH", "")
-    path_parts = [part for part in current_pythonpath.split(":") if part]
+    path_parts = [part for part in current_pythonpath.split(pathsep) if part]
     if project_root not in path_parts:
         path_parts.insert(0, project_root)
-    env["PYTHONPATH"] = ":".join(path_parts)
+    env["PYTHONPATH"] = pathsep.join(path_parts)
 
     return env
 

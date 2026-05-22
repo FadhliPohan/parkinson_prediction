@@ -4,7 +4,7 @@
 Dokumen ini menjelaskan pipeline menu terminal `main.py`, alur eksekusi backend, dan output yang dihasilkan.
 
 Fokus dokumen:
-1. Menjelaskan pipeline `1` sampai `10`.
+1. Menjelaskan pipeline `1` sampai `12`.
 2. Menjelaskan hubungan menu terminal dengan `training/train.py`.
 3. Menjelaskan eksekusi kombinasi eksperimen `dataset -> augmentasi -> method -> model`.
 
@@ -21,17 +21,20 @@ Fokus dokumen:
    - `transfer_learning_mixed_precision`
    - `full_fine_tuning`
 4. Model aktif:
-   - `mobilenetv2`
-   - `resnet50`
-   - `vgg19`
-   - `resnet152`
-   - `inception_googlenet`
-   - `efficientnet`
-   - `densenet121`
-   - `vit`
-   - `swintransformer`
-   - `deit`
-   - `yolov8`
+   - Family `cnn`:
+     - `mobilenetv2`
+     - `resnet50`
+     - `vgg19`
+     - `resnet152`
+     - `inception_googlenet`
+     - `efficientnet`
+     - `densenet121`
+   - Family `transformer`:
+     - `vit`
+     - `swintransformer`
+     - `deit`
+   - Family `yolo`:
+     - `yolov8`
 
 ## 3. Entry Point Eksekusi
 1. Menu interaktif:
@@ -54,6 +57,8 @@ python3 training/train.py ...
 8. Pipeline penuh (check -> split -> augment -> train all models).
 9. Jalankan dashboard Streamlit.
 10. Workflow training fleksibel (multi dataset/augmentasi/method/model).
+11. Pipeline penuh model CNN.
+12. Pipeline penuh model Transformer.
 
 ## 5. Detail Tiap Pipeline
 
@@ -145,11 +150,29 @@ Aktivitas:
    - `ask`: tanya user apakah perlu training ulang,
    - `retrain`: langsung training ulang,
    - `skip`: lewati kombinasi lama.
+9. User bisa memfilter family model lewat opsi `model-families` (contoh: `cnn`, `transformer`).
+10. User bisa mengaktifkan auto-shutdown setelah training selesai.
 
 Output tambahan:
 1. Ringkasan batch workflow di:
    - `report/_workflow_runs/workflow_summary_<timestamp>.json`
    - `report/_workflow_runs/workflow_summary_<timestamp>.csv`
+
+### Pipeline 11 - Pipeline penuh model CNN
+Aktivitas:
+1. Pilih dataset.
+2. Pilih method (single atau all).
+3. Jalankan check + split + info augmentasi.
+4. Training seluruh model pada family `cnn`.
+5. Opsi auto-shutdown tersedia setelah workflow selesai.
+
+### Pipeline 12 - Pipeline penuh model Transformer
+Aktivitas:
+1. Pilih dataset.
+2. Pilih method (single atau all).
+3. Jalankan check + split + info augmentasi.
+4. Training seluruh model pada family `transformer`.
+5. Opsi auto-shutdown tersedia setelah workflow selesai.
 
 ## 6. Flow Runtime `training/train.py`
 Setelah command dieksekusi:
@@ -159,30 +182,32 @@ Setelah command dieksekusi:
    - fallback `--preprocessing-mode` untuk kompatibilitas lama.
 3. Resolve method target (`--method` multi/all atau `--all-methods`).
 4. Resolve model target (`--models` single/multi/all).
-5. Merge parameter training:
+5. (Opsional) filter model berdasarkan family (`--model-families`).
+6. Merge parameter training:
    - default training,
    - override method,
    - override user global,
    - override runtime per method (jika diisi).
-6. Jika `--split-first` aktif dan folder split sudah ada:
+7. Jika `--split-first` aktif dan folder split sudah ada:
    - `--on-existing-split ask`: tanya user split ulang atau pakai split lama,
    - `--on-existing-split resplit`: langsung split ulang,
    - `--on-existing-split skip`: pakai split lama.
-7. Validasi split balance dilakukan sebelum training:
+8. Validasi split balance dilakukan sebelum training:
    - cek balance total per class sesudah balancing,
    - cek balance per split `train/testing/validation`.
-8. Eksekusi loop kombinasi:
+9. Eksekusi loop kombinasi:
    - dataset loop,
    - augmentasi loop,
    - method loop,
    - model loop.
-9. Cek apakah kombinasi sudah punya run sebelumnya.
-10. Jika run sudah ada:
+10. Cek apakah kombinasi sudah punya run sebelumnya.
+11. Jika run sudah ada:
    - mode `ask` akan meminta konfirmasi retrain,
    - mode `retrain` akan membuat run/model baru dengan timestamp training baru,
    - mode `skip` akan melewati kombinasi lama.
-11. Simpan hasil run per kombinasi.
-12. Ringkasan workflow juga menyimpan `epochs`, `batch_size`, dan `fine_tune_epochs` per kombinasi.
+12. Simpan hasil run per kombinasi.
+13. Ringkasan workflow juga menyimpan `epochs`, `batch_size`, dan `fine_tune_epochs` per kombinasi.
+14. Jika `--shutdown-on-finish` aktif, sistem menjalankan perintah shutdown OS setelah workflow selesai.
 
 ## 7. Contoh Command
 
@@ -217,7 +242,38 @@ python3 training/train.py \
   --preprocessing-mode both
 ```
 
-### D. Mode existing run
+### D. Pipeline khusus family CNN
+```bash
+python3 training/train.py \
+  --dataset parkinson_merder \
+  --models all \
+  --model-families cnn \
+  --all-methods \
+  --split-first \
+  --on-existing ask
+```
+
+### E. Pipeline khusus family Transformer
+```bash
+python3 training/train.py \
+  --dataset parkinson_merder \
+  --models all \
+  --model-families transformer \
+  --all-methods \
+  --split-first \
+  --on-existing ask
+```
+
+### F. Auto-shutdown setelah training
+```bash
+python3 training/train.py \
+  --dataset parkinson_merder \
+  --models mobilenetv2 \
+  --method transfer_learning \
+  --shutdown-on-finish
+```
+
+### G. Mode existing run
 ```bash
 # Tanyakan dulu jika kombinasi sudah pernah training
 python3 training/train.py ... --on-existing ask
@@ -229,7 +285,7 @@ python3 training/train.py ... --on-existing retrain
 python3 training/train.py ... --on-existing skip
 ```
 
-### E. Mode existing split
+### H. Mode existing split
 ```bash
 # Tanyakan dulu jika folder split sudah ada
 python3 training/train.py ... --split-first --on-existing-split ask
@@ -269,7 +325,7 @@ trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
 2. Pipeline 2 -> `training/1.check_dataset.py`.
 3. Pipeline 3 -> `training/2.split_data_testing.py`.
 4. Pipeline 4 -> `training/3.augmentasi.py`.
-5. Pipeline 5/6/7/8/10 -> `training/train.py`.
+5. Pipeline 5/6/7/8/10/11/12 -> `training/train.py`.
 6. Pipeline 9 -> `streamlit run web/app.py`.
 
 ## 10. Alur Dashboard Report
@@ -296,6 +352,9 @@ trained_models/<dataset>/<augmentasi>/<method>/<model>/<run_id>/
    - Kurangi kombinasi (dataset/method/model/augmentasi) atau jalankan batch bertahap.
 6. Kombinasi lama ikut tertimpa analisis:
    - Gunakan `--on-existing ask` atau `--on-existing skip` agar run lama tidak tercampur tanpa sengaja.
+7. Auto-shutdown tidak berjalan:
+   - Cek hak akses user OS untuk perintah shutdown.
+   - Di Windows, pastikan command prompt dijalankan sebagai user yang punya izin shutdown.
 
 ## 12. Catatan Penting
 1. Setiap kombinasi eksperimen dijalankan terpisah agar analisis tidak tercampur.

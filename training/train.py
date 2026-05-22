@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import platform
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -66,6 +68,81 @@ def _parse_models_arg(models_arg: str, registry: ModelRegistry) -> List[str]:
     if unknown:
         raise ValueError("Model tidak ditemukan: {}".format(", ".join(unknown)))
     return requested
+
+
+def _parse_model_families_arg(model_families_arg: Optional[str], registry: ModelRegistry) -> List[str]:
+    if model_families_arg is None or not str(model_families_arg).strip():
+        return []
+
+    normalized = str(model_families_arg).strip().lower()
+    if normalized in {"all", "*"}:
+        return registry.list_family_ids(enabled_only=True)
+
+    requested = [item.strip().lower() for item in str(model_families_arg).split(",") if item.strip()]
+    if not requested:
+        raise ValueError("Argumen --model-families kosong")
+
+    available = set(registry.list_family_ids(enabled_only=False))
+    unknown = [family for family in requested if family not in available]
+    if unknown:
+        raise ValueError(
+            "Family model tidak ditemukan: {}. Tersedia: {}".format(
+                ", ".join(unknown),
+                ", ".join(sorted(available)),
+            )
+        )
+
+    deduped: List[str] = []
+    seen = set()
+    for family in requested:
+        if family in seen:
+            continue
+        deduped.append(family)
+        seen.add(family)
+    return deduped
+
+
+def _resolve_model_cfgs(
+    model_ids: List[str],
+    model_families_arg: Optional[str],
+    model_registry: ModelRegistry,
+) -> Tuple[List[ModelConfig], List[str]]:
+    model_cfgs = [model_registry.get(model_id) for model_id in model_ids]
+    enabled_model_cfgs = [cfg for cfg in model_cfgs if cfg.enabled]
+    if not enabled_model_cfgs:
+        raise ValueError("Tidak ada model aktif (enabled=true) untuk dijalankan.")
+
+    selected_families = _parse_model_families_arg(model_families_arg, model_registry)
+    if not selected_families:
+        return enabled_model_cfgs, []
+
+    selected_family_set = set(selected_families)
+    filtered = [cfg for cfg in enabled_model_cfgs if cfg.family in selected_family_set]
+    if not filtered:
+        raise ValueError(
+            "Tidak ada model aktif yang cocok dengan family: {}.".format(", ".join(selected_families))
+        )
+    return filtered, selected_families
+
+
+def _build_shutdown_command() -> List[str]:
+    system_name = platform.system().strip().lower()
+    if system_name.startswith("win"):
+        return ["shutdown", "/s", "/t", "0"]
+    return ["shutdown", "-h", "now"]
+
+
+def _shutdown_device() -> None:
+    command = _build_shutdown_command()
+    print("\n[SYSTEM] Auto-shutdown aktif. Menjalankan:", " ".join(command))
+    try:
+        result = subprocess.run(command, check=False)
+    except Exception as exc:
+        print("[WARN] Gagal mengeksekusi perintah shutdown:", exc)
+        return
+
+    if result.returncode != 0:
+        print("[WARN] Perintah shutdown selesai dengan exit code:", result.returncode)
 
 
 def _resolve_dataset_ids(dataset_arg: Optional[str], registry: DatasetRegistry) -> List[str]:
@@ -555,6 +632,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--all-methods", action="store_true", help="Jalankan semua method yang terdaftar")
     parser.add_argument("--models", type=str, default="all", help="List model dipisah koma, atau 'all'")
+    parser.add_argument(
+        "--model-families",
+        type=str,
+        default=None,
+        help="Filter family model (contoh: cnn,transformer) atau 'all'.",
+    )
 
     parser.add_argument(
         "--augmentations",
@@ -575,6 +658,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment-info", action="store_true", help="Cetak info augmentasi train on-the-fly")
 
     parser.add_argument("--stop-on-error", action="store_true", help="Hentikan jika ada model gagal")
+    parser.add_argument(
+        "--shutdown-on-finish",
+        action="store_true",
+        help="Shutdown perangkat otomatis setelah workflow training selesai.",
+    )
     parser.add_argument(
         "--on-existing",
         type=str,
@@ -645,9 +733,12 @@ def main() -> None:
     dataset_ids = _resolve_dataset_ids(args.dataset, dataset_registry)
     method_ids = _resolve_method_ids(args, method_registry)
     model_ids = _parse_models_arg(args.models, model_registry)
+    model_cfgs, selected_families = _resolve_model_cfgs(
+        model_ids=model_ids,
+        model_families_arg=args.model_families,
+        model_registry=model_registry,
+    )
     selected_augmentation_ids = _resolve_augmentation_ids(args, augmentation_registry)
-
-    model_cfgs = [model_registry.get(model_id) for model_id in model_ids if model_registry.get(model_id).enabled]
 
     user_overrides = _collect_user_overrides(args)
     method_runtime_overrides = _parse_method_overrides_json(args.method_overrides_json, method_ids)
@@ -656,6 +747,8 @@ def main() -> None:
     print("Dataset    :", ", ".join(dataset_ids))
     print("Augmentasi :", ", ".join(selected_augmentation_ids))
     print("Method     :", ", ".join(method_ids))
+    if selected_families:
+        print("Family     :", ", ".join(selected_families))
     print("Model      :", ", ".join([m.model_id for m in model_cfgs]))
     if method_runtime_overrides:
         print("Override per method:", json.dumps(method_runtime_overrides, ensure_ascii=False))
@@ -901,6 +994,9 @@ def main() -> None:
     summary_path = generate_report(workflow_results)
     if summary_path is not None:
         print("\nRingkasan workflow tersimpan di:", summary_path)
+
+    if args.shutdown_on_finish:
+        _shutdown_device()
 
     if overall_failed:
         print("\nTraining selesai dengan kegagalan:")
