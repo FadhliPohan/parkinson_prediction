@@ -40,6 +40,7 @@ from src.reporting.report_writer import (
     write_latest_run_marker,
     write_run_manifest,
 )
+from src.optimizer import get_optimizer
 
 
 def set_global_seed(seed: int) -> None:
@@ -332,6 +333,7 @@ def build_model(
     dropout_rate: float,
     use_pretrained: bool,
     learning_rate: float,
+    optimizer_name: str = "adam",
 ) -> Tuple[tf.keras.Model, tf.keras.Model]:
     weights = "imagenet" if use_pretrained else None
     try:
@@ -361,15 +363,17 @@ def build_model(
     x = tf.keras.layers.GlobalAveragePooling2D(name="gap")(x)
     x = tf.keras.layers.Dropout(dropout_rate, name="dropout")(x)
 
+    # dtype="float32" pada layer output menjaga stabilitas numerik saat mixed
+    # precision aktif (REC-11). Aman juga pada mode float32 biasa.
     if num_classes == 2:
-        outputs = tf.keras.layers.Dense(1, activation="sigmoid", name="prediction")(x)
+        outputs = tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="prediction")(x)
     else:
-        outputs = tf.keras.layers.Dense(num_classes, activation="softmax", name="prediction")(x)
+        outputs = tf.keras.layers.Dense(num_classes, activation="softmax", dtype="float32", name="prediction")(x)
 
     model = tf.keras.Model(inputs=inputs, outputs=outputs, name="classifier_model")
     loss, metrics = build_loss_and_metrics(num_classes)
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        optimizer=get_optimizer(optimizer_name, learning_rate=learning_rate),
         loss=loss,
         metrics=metrics,
     )
@@ -391,6 +395,26 @@ def build_loss_and_metrics(num_classes: int):
             tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy"),
         ],
     )
+
+
+def compute_class_weight_map(labels: List[int], num_classes: int) -> Dict[int, float]:
+    """Hitung class_weight bergaya sklearn 'balanced' (REC-10).
+
+    weight[c] = n_samples / (n_classes * count[c]). Berguna saat masih ada sisa
+    ketidakseimbangan kelas agar loss tidak bias ke kelas mayoritas. Penting
+    untuk konteks medis (mis. menekan false negative pada kelas Parkinson).
+    """
+    counts = [0] * num_classes
+    for label in labels:
+        index = int(label)
+        if 0 <= index < num_classes:
+            counts[index] += 1
+
+    total = sum(counts)
+    weights: Dict[int, float] = {}
+    for index, count in enumerate(counts):
+        weights[index] = float(total / (num_classes * count)) if count > 0 else 1.0
+    return weights
 
 
 def merge_histories(history_a: Dict[str, List[float]], history_b: Dict[str, List[float]]) -> Dict[str, List[float]]:
@@ -734,6 +758,41 @@ def run_training_pipeline(
     final_model_path = run_model_dir / "final_model.keras"
     final_compute_device = compute_device
 
+    optimizer_name = str(getattr(args, "optimizer", "adam") or "adam")
+    # class_weight 'balanced' untuk menekan bias kelas mayoritas (REC-10).
+    class_weight_map = compute_class_weight_map(train_labels, num_classes)
+    print("\n=== Optimizer & Class Weight ===")
+    print("Optimizer        :", optimizer_name)
+    print("Class weight map :", class_weight_map)
+
+    def _build_stage_callbacks() -> List[tf.keras.callbacks.Callback]:
+        # Callback dibuat BARU per stage agar state (best/wait/LR) tidak terbawa
+        # antar stage (REC-04). Monitoring diselaraskan ke val_accuracy (REC-03).
+        return [
+            tf.keras.callbacks.ModelCheckpoint(
+                filepath=str(best_model_path),
+                monitor="val_accuracy",
+                mode="max",
+                save_best_only=True,
+                save_weights_only=False,
+                verbose=1,
+            ),
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_accuracy",
+                mode="max",
+                patience=args.early_stopping_patience,
+                restore_best_weights=True,
+                verbose=1,
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_accuracy",
+                mode="max",
+                factor=0.5,
+                patience=max(1, args.early_stopping_patience // 2),
+                verbose=1,
+            ),
+        ]
+
     def _run_training_once(force_cpu: bool) -> Tuple[tf.keras.Model, Dict[str, List[float]]]:
         device_context = tf.device("/CPU:0") if force_cpu else nullcontext()
 
@@ -746,31 +805,8 @@ def run_training_pipeline(
                 dropout_rate=args.dropout,
                 use_pretrained=not args.no_pretrained,
                 learning_rate=args.learning_rate,
+                optimizer_name=optimizer_name,
             )
-
-            checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-                filepath=str(best_model_path),
-                monitor="val_accuracy",
-                mode="max",
-                save_best_only=True,
-                save_weights_only=False,
-                verbose=1,
-            )
-            callbacks = [
-                checkpoint_callback,
-                tf.keras.callbacks.EarlyStopping(
-                    monitor="val_loss",
-                    patience=args.early_stopping_patience,
-                    restore_best_weights=True,
-                    verbose=1,
-                ),
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    monitor="val_loss",
-                    factor=0.3,
-                    patience=max(1, args.early_stopping_patience // 2),
-                    verbose=1,
-                ),
-            ]
 
             device_label = "CPU" if force_cpu else "GPU"
             print("\n=== Training {} (Stage 1 - {}) ===".format(model_name, device_label))
@@ -778,7 +814,8 @@ def run_training_pipeline(
                 train_ds,
                 validation_data=val_ds,
                 epochs=args.epochs,
-                callbacks=callbacks,
+                callbacks=_build_stage_callbacks(),
+                class_weight=class_weight_map,
                 verbose=1,
             ).history
 
@@ -793,7 +830,7 @@ def run_training_pipeline(
 
                 fine_loss, fine_metrics = build_loss_and_metrics(num_classes)
                 model.compile(
-                    optimizer=tf.keras.optimizers.Adam(learning_rate=args.fine_tune_learning_rate),
+                    optimizer=get_optimizer(optimizer_name, learning_rate=args.fine_tune_learning_rate),
                     loss=fine_loss,
                     metrics=fine_metrics,
                 )
@@ -802,7 +839,8 @@ def run_training_pipeline(
                     train_ds,
                     validation_data=val_ds,
                     epochs=args.fine_tune_epochs,
-                    callbacks=callbacks,
+                    callbacks=_build_stage_callbacks(),
+                    class_weight=class_weight_map,
                     verbose=1,
                 ).history
                 full_history = merge_histories(history_stage1, history_stage2)
@@ -1108,6 +1146,13 @@ def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
         help="Learning rate stage 2 (fine tuning).",
     )
     parser.add_argument("--dropout", type=float, default=0.35, help="Dropout head classifier.")
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adam",
+        choices=["adam", "no_optimize"],
+        help="Optimizer training: adam (adaptif) atau no_optimize (SGD plain baseline).",
+    )
     parser.add_argument(
         "--early-stopping-patience",
         type=int,

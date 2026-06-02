@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,10 +18,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.registry import DatasetRegistry
+from src.datasets.splitter import SPLIT_PRESETS
 from src.datasets.validator import discover_class_directories, list_image_files
 from src.inference.model_loader import load_model_bundle
 from src.inference.predictor import predict_from_bundle
 from src.models.registry import ModelRegistry
+from src.optimizer import OPTIMIZER_DESCRIPTIONS, list_optimizers
+from src.utils.runtime import build_runtime_env, get_runtime_python
 from src.reporting.report_reader import (
     build_experiment_index,
     build_latest_summary_table,
@@ -188,6 +192,31 @@ def _safe_float(value: object) -> Optional[float]:
         return float(value)
     except Exception:
         return None
+
+
+def _read_macro_avg(run_dir: Path) -> Dict[str, Optional[float]]:
+    """Ambil precision/recall/f1 'macro avg' dari classification_report.csv."""
+    result: Dict[str, Optional[float]] = {"precision": None, "recall": None, "f1-score": None}
+    cls_path = run_dir / "classification_report.csv"
+    if not cls_path.exists():
+        return result
+    try:
+        df = pd.read_csv(cls_path)
+    except Exception:
+        return result
+    if df.empty:
+        return result
+
+    label_col = df.columns[0]
+    for target in ("macro avg", "macro_avg", "weighted avg"):
+        match = df[df[label_col].astype(str).str.strip() == target]
+        if not match.empty:
+            row = match.iloc[0]
+            for key in ("precision", "recall", "f1-score"):
+                if key in df.columns:
+                    result[key] = _safe_float(row.get(key))
+            break
+    return result
 
 
 def _safe_int(value: object) -> Optional[int]:
@@ -575,9 +604,21 @@ def _render_run_detail(record: Dict[str, object]) -> None:
     c5, c6, c7 = st.columns(3)
     test_accuracy = _safe_float(record.get("accuracy") or record.get("test_accuracy"))
     c5.metric("Test Accuracy", _metric_text(test_accuracy))
-    c6.metric("F1 Score", _metric_text(_safe_float(record.get("f1_score"))))
+    c6.metric("F1 Score (macro)", _metric_text(_safe_float(record.get("f1_score"))))
     duration = _safe_float(record.get("training_time_seconds"))
     c7.metric("Training Time (s)", _duration_text(duration))
+
+    # T3: lengkapi metrik klasifikasi (ROC-AUC + precision/recall macro).
+    macro_avg = _read_macro_avg(run_dir)
+    metrics_json = safe_load_json(run_dir / "evaluation_metrics.json") or {}
+    roc_auc_value = _safe_float(record.get("roc_auc"))
+    if roc_auc_value is None:
+        roc_auc_value = _safe_float(metrics_json.get("roc_auc"))
+
+    c8, c9, c10 = st.columns(3)
+    c8.metric("ROC-AUC", _metric_text(roc_auc_value))
+    c9.metric("Precision (macro)", _metric_text(macro_avg.get("precision")))
+    c10.metric("Recall (macro)", _metric_text(macro_avg.get("recall")))
 
     report_path = _value_to_path(record.get("report_dir")) or run_dir
     model_dir = _value_to_path(record.get("model_dir"))
@@ -686,6 +727,115 @@ def _render_run_detail(record: Dict[str, object]) -> None:
             st.warning("`run_manifest.json` tidak tersedia atau tidak valid.")
 
 
+def _history_series(history_df: pd.DataFrame, candidates: List[str]) -> Optional[pd.Series]:
+    for col in candidates:
+        if col in history_df.columns:
+            return pd.to_numeric(history_df[col], errors="coerce")
+    return None
+
+
+_OVERLAY_METRIC_CANDIDATES: Dict[str, List[str]] = {
+    "val_accuracy": ["val_accuracy", "val/accuracy_top1", "validation_accuracy"],
+    "accuracy": ["accuracy", "train/accuracy", "metrics/accuracy_top1"],
+    "val_loss": ["val_loss", "val/loss", "val/cls_loss", "validation_loss"],
+    "loss": ["loss", "train/loss", "train/cls_loss"],
+}
+
+
+def _render_overlay_comparison(subset_df: pd.DataFrame, selected_dataset: str) -> None:
+    """T4: overlay >=2 run/model (tabel metrik + grafik kurva training overlay)."""
+    if subset_df.empty:
+        st.info("Belum ada run untuk dataset ini.")
+        return
+
+    work_df = subset_df.copy().reset_index(drop=True)
+    label_map: Dict[str, Dict[str, object]] = {}
+    for _, row in work_df.iterrows():
+        label = "{} | {} | {} | {}".format(
+            row.get("model"), row.get("method"), row.get("augmentation"), row.get("run_id")
+        )
+        label_map[label] = row.to_dict()
+
+    all_labels = list(label_map.keys())
+    default_selection = all_labels[: min(2, len(all_labels))]
+    selected_labels = st.multiselect(
+        "Pilih minimal 2 run untuk dibandingkan (overlay)",
+        options=all_labels,
+        default=default_selection,
+        key=f"overlay_select_{selected_dataset}",
+    )
+
+    if len(selected_labels) < 2:
+        st.warning("Pilih minimal 2 run untuk membuat perbandingan overlay.")
+        return
+
+    # Tabel metrik berdampingan.
+    metric_rows = []
+    for label in selected_labels:
+        row = label_map[label]
+        run_dir = _value_to_path(row.get("run_dir") or row.get("report_dir"))
+        roc_auc = None
+        if run_dir is not None:
+            metrics_json = safe_load_json(run_dir / "evaluation_metrics.json") or {}
+            roc_auc = _safe_float(metrics_json.get("roc_auc"))
+        metric_rows.append(
+            {
+                "model": row.get("model"),
+                "method": row.get("method"),
+                "augmentation": row.get("augmentation"),
+                "run_id": row.get("run_id"),
+                "val_accuracy": _safe_float(row.get("val_accuracy")),
+                "test_accuracy": _safe_float(row.get("test_accuracy")),
+                "f1_score": _safe_float(row.get("f1_score")),
+                "roc_auc": roc_auc,
+                "train_loss": _safe_float(row.get("train_loss")),
+                "val_loss": _safe_float(row.get("val_loss")),
+                "training_time_seconds": _safe_float(row.get("training_time_seconds")),
+            }
+        )
+    st.markdown("**Tabel Metrik Berdampingan**")
+    st.dataframe(pd.DataFrame(metric_rows), use_container_width=True)
+
+    # Grafik overlay kurva training.
+    metric_choice = st.radio(
+        "Metrik kurva untuk overlay",
+        options=list(_OVERLAY_METRIC_CANDIDATES.keys()),
+        index=0,
+        horizontal=True,
+        key=f"overlay_metric_{selected_dataset}",
+    )
+    candidates = _OVERLAY_METRIC_CANDIDATES[metric_choice]
+
+    overlay_series: Dict[str, pd.Series] = {}
+    missing_runs: List[str] = []
+    for label in selected_labels:
+        row = label_map[label]
+        run_dir = _value_to_path(row.get("run_dir") or row.get("report_dir"))
+        if run_dir is None:
+            missing_runs.append(label)
+            continue
+        history_df = _read_csv(run_dir / "training_history.csv")
+        if history_df.empty:
+            missing_runs.append(label)
+            continue
+        series = _history_series(history_df, candidates)
+        if series is None or series.dropna().empty:
+            missing_runs.append(label)
+            continue
+        overlay_series[label] = series.reset_index(drop=True)
+
+    if overlay_series:
+        overlay_df = pd.DataFrame(overlay_series)
+        overlay_df.index.name = "epoch"
+        st.markdown(f"**Overlay Kurva `{metric_choice}` per Epoch**")
+        st.line_chart(overlay_df)
+    else:
+        st.info("Tidak ada training_history.csv yang bisa dioverlay untuk metrik ini.")
+
+    if missing_runs:
+        st.caption("Run tanpa data kurva untuk metrik ini: " + ", ".join(missing_runs))
+
+
 def _render_comparison_section(
     records: List[Dict[str, object]],
     dataset_registry: DatasetRegistry,
@@ -716,12 +866,13 @@ def _render_comparison_section(
 
     subset_df = df[df["dataset"] == selected_dataset].copy()
 
-    tab_method, tab_model, tab_aug, tab_rank = st.tabs(
+    tab_method, tab_model, tab_aug, tab_rank, tab_overlay = st.tabs(
         [
             "Perbandingan Method",
             "Perbandingan Model",
             "Perbandingan Augmentasi",
             "Ranking Best Model",
+            "Overlay Model",
         ]
     )
 
@@ -868,6 +1019,14 @@ def _render_comparison_section(
             empty_message="Ranking model belum tersedia.",
         )
 
+    with tab_overlay:
+        st.markdown(
+            "<div class='pp-note'>Pilih beberapa run lintas model/method/augmentasi, "
+            "lalu bandingkan tabel metrik dan overlay kurva training-nya.</div>",
+            unsafe_allow_html=True,
+        )
+        _render_overlay_comparison(subset_df=subset_df, selected_dataset=selected_dataset)
+
 
 def _render_full_report_export_section(
     dataset_registry: DatasetRegistry,
@@ -954,6 +1113,110 @@ def _render_full_report_export_section(
     )
 
 
+def _build_printable_html(df: pd.DataFrame, title: str) -> str:
+    """Bangun HTML ringkas (auto-print A4) dari tabel terfilter, untuk disimpan sebagai PDF."""
+    table_html = df.to_html(index=False, border=0, justify="center", na_rep="-")
+    return """<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>{title}</title>
+<style>
+  @page {{ size: A4 landscape; margin: 12mm; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; color: #123726; }}
+  h1 {{ font-size: 18px; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 11px; }}
+  th, td {{ border: 1px solid #b7d8c6; padding: 4px 6px; text-align: center; }}
+  thead th {{ background: #e4f6ee; }}
+  tbody tr:nth-child(even) {{ background: #f5fbf8; }}
+</style>
+</head>
+<body>
+  <h1>{title}</h1>
+  <p>Jumlah baris: {rows}</p>
+  {table}
+  <script>window.onload = function() {{ window.print(); }};</script>
+</body>
+</html>""".format(title=title, rows=len(df), table=table_html)
+
+
+def _render_download_section(records: List[Dict[str, object]]) -> None:
+    """T5: download report berfilter (CSV/HTML-printable) + pemilihan model spesifik."""
+    st.markdown("**Download Report Berfilter (CSV / PDF)**")
+    full_df = _build_record_dataframe(records)
+    if full_df.empty:
+        st.info("Belum ada data report untuk diunduh.")
+        return
+
+    download_columns = [
+        "experiment_id", "dataset", "augmentation", "method", "model", "run_id",
+        "run_started_at", "epochs", "batch_size", "fine_tune_epochs",
+        "train_accuracy", "val_accuracy", "train_loss", "val_loss",
+        "test_accuracy", "f1_score", "training_time_seconds",
+    ]
+    base_df = full_df[[c for c in download_columns if c in full_df.columns]].copy()
+
+    f1, f2, f3, f4 = st.columns(4)
+    datasets = sorted(base_df["dataset"].dropna().astype(str).unique())
+    methods = sorted(base_df["method"].dropna().astype(str).unique())
+    augmentations = sorted(base_df["augmentation"].dropna().astype(str).unique())
+    models = sorted(base_df["model"].dropna().astype(str).unique())
+
+    sel_datasets = f1.multiselect("Dataset", datasets, default=datasets, key="dl_datasets")
+    sel_methods = f2.multiselect("Method", methods, default=methods, key="dl_methods")
+    sel_augs = f3.multiselect("Augmentasi", augmentations, default=augmentations, key="dl_augs")
+    sel_models = f4.multiselect("Model (pilih spesifik)", models, default=models, key="dl_models")
+
+    filtered = base_df[
+        base_df["dataset"].astype(str).isin(sel_datasets or datasets)
+        & base_df["method"].astype(str).isin(sel_methods or methods)
+        & base_df["augmentation"].astype(str).isin(sel_augs or augmentations)
+        & base_df["model"].astype(str).isin(sel_models or models)
+    ].copy()
+
+    # Filter tanggal opsional berdasarkan run_started_at.
+    started = pd.to_datetime(filtered.get("run_started_at"), errors="coerce")
+    valid_dates = started.dropna()
+    if not valid_dates.empty:
+        min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
+        use_date = st.checkbox("Filter rentang tanggal (run_started_at)", value=False, key="dl_use_date")
+        if use_date and min_d < max_d:
+            date_range = st.date_input(
+                "Rentang tanggal", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="dl_date_range"
+            )
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                start_d, end_d = date_range
+                mask = (started.dt.date >= start_d) & (started.dt.date <= end_d)
+                filtered = filtered[mask.fillna(False)]
+
+    st.caption(f"Baris terpilih untuk diunduh: {len(filtered)} / {len(base_df)}")
+    st.dataframe(filtered, use_container_width=True)
+
+    if filtered.empty:
+        st.warning("Tidak ada baris sesuai filter. Sesuaikan filter di atas.")
+        return
+
+    c_csv, c_pdf = st.columns(2)
+    c_csv.download_button(
+        "Download CSV",
+        data=filtered.to_csv(index=False).encode("utf-8"),
+        file_name="report_filtered.csv",
+        mime="text/csv",
+        key="dl_csv_btn",
+    )
+    c_pdf.download_button(
+        "Download HTML (Print -> Save as PDF)",
+        data=_build_printable_html(filtered, "Report Parkinson (Filtered)").encode("utf-8"),
+        file_name="report_filtered.html",
+        mime="text/html",
+        key="dl_pdf_btn",
+    )
+    st.caption(
+        "Catatan: file HTML akan otomatis memanggil dialog print (A4). Pilih 'Save as PDF' "
+        "untuk menyimpan sebagai PDF tanpa dependency tambahan."
+    )
+
+
 def render_report_tab(
     dataset_registry: DatasetRegistry,
     model_registry: ModelRegistry,
@@ -974,6 +1237,10 @@ def render_report_tab(
     if not records:
         st.info("Belum ada report training.")
         return
+
+    with st.expander("Download Report Berfilter (CSV / PDF)", expanded=False):
+        _render_download_section(records)
+    st.divider()
 
     latest_rows = build_latest_summary_table(REPORT_ROOT)
     latest_df = pd.DataFrame(latest_rows)
@@ -1322,6 +1589,154 @@ def render_prediction_tab(
             st.error("Sebagian model gagal dipakai:\n- " + "\n- ".join(errors))
 
 
+def _build_training_command(form: Dict[str, Any]) -> List[str]:
+    """Susun command pemanggilan training/train.py dari input form web."""
+    train_script = PROJECT_ROOT / "training" / "train.py"
+    cmd: List[str] = [
+        str(get_runtime_python()),
+        str(train_script),
+        "--dataset", str(form["dataset"]),
+        "--models", ",".join(form["models"]),
+        "--method", str(form["method"]),
+        "--augmentations", str(form["augmentation"]),
+        "--optimizer", str(form["optimizer"]),
+        "--epochs", str(form["epochs"]),
+        "--batch-size", str(form["batch_size"]),
+        "--learning-rate", str(form["learning_rate"]),
+        "--fine-tune-epochs", str(form["fine_tune_epochs"]),
+        "--seed", str(form["seed"]),
+        # Web non-interaktif: retrain agar benar-benar jalan (run lama tetap tersimpan).
+        "--on-existing", "retrain",
+    ]
+    if form.get("split_first"):
+        cmd += ["--split-first", "--on-existing-split", "resplit"]
+        if form.get("split_preset"):
+            cmd += ["--split-preset", str(form["split_preset"])]
+    return cmd
+
+
+def render_training_tab(
+    dataset_registry: DatasetRegistry,
+    model_registry: ModelRegistry,
+    augmentation_registry: TrainingAugmentationRegistry,
+    method_registry: TrainingMethodRegistry,
+) -> None:
+    st.subheader("Training via Web")
+    st.markdown(
+        "<div class='pp-note'>Jalankan training langsung dari dashboard. Proses memakai "
+        "<code>training/train.py</code> di belakang layar. Biarkan tab tetap terbuka selama training berjalan.</div>",
+        unsafe_allow_html=True,
+    )
+
+    dataset_ids = dataset_registry.list_dataset_ids()
+    if not dataset_ids:
+        st.info("Belum ada dataset terdaftar.")
+        return
+
+    c1, c2 = st.columns(2)
+    selected_dataset = c1.selectbox("Dataset", dataset_ids, index=0, key="train_dataset")
+    dataset_cfg = dataset_registry.get(selected_dataset)
+
+    model_options = model_registry.list_model_ids(enabled_only=True)
+    selected_models = c2.multiselect(
+        "Model", model_options, default=model_options[: min(1, len(model_options))], key="train_models"
+    )
+
+    c3, c4, c5 = st.columns(3)
+    method_options = method_registry.list_method_ids()
+    selected_method = c3.selectbox("Method", method_options, index=0, key="train_method")
+    optimizer_options = list_optimizers()
+    selected_optimizer = c4.selectbox(
+        "Optimizer",
+        optimizer_options,
+        index=optimizer_options.index("adam") if "adam" in optimizer_options else 0,
+        key="train_optimizer",
+        help=" | ".join(f"{k}: {v}" for k, v in OPTIMIZER_DESCRIPTIONS.items()),
+    )
+    aug_options = dataset_cfg.augmentation_options or augmentation_registry.list_augmentation_ids()
+    selected_aug = c5.selectbox("Augmentasi", aug_options, index=0, key="train_aug")
+
+    st.markdown("**Hyperparameter Dasar**")
+    h1, h2, h3, h4, h5 = st.columns(5)
+    epochs = h1.number_input("Epoch", min_value=1, max_value=500, value=25, step=1, key="train_epochs")
+    batch_size = h2.number_input("Batch size", min_value=1, max_value=256, value=16, step=1, key="train_batch")
+    learning_rate = h3.number_input(
+        "Learning rate", min_value=1e-6, max_value=1.0, value=1e-3, step=1e-4, format="%.6f", key="train_lr"
+    )
+    fine_tune_epochs = h4.number_input("Fine-tune epoch", min_value=0, max_value=200, value=10, step=1, key="train_ft")
+    seed = h5.number_input("Seed", min_value=0, max_value=10_000, value=42, step=1, key="train_seed")
+
+    st.markdown("**Dataset Split**")
+    s1, s2 = st.columns(2)
+    do_split = s1.checkbox("Split ulang sebelum training (--split-first)", value=False, key="train_split_first")
+    split_preset = s2.selectbox(
+        "Preset split", sorted(SPLIT_PRESETS.keys()), index=0, key="train_split_preset", disabled=not do_split
+    )
+
+    if not selected_models:
+        st.warning("Pilih minimal 1 model.")
+        return
+
+    form = {
+        "dataset": selected_dataset,
+        "models": selected_models,
+        "method": selected_method,
+        "optimizer": selected_optimizer,
+        "augmentation": selected_aug,
+        "epochs": int(epochs),
+        "batch_size": int(batch_size),
+        "learning_rate": float(learning_rate),
+        "fine_tune_epochs": int(fine_tune_epochs),
+        "seed": int(seed),
+        "split_first": bool(do_split),
+        "split_preset": split_preset if do_split else None,
+    }
+
+    command = _build_training_command(form)
+    st.markdown("**Command yang akan dijalankan**")
+    st.code(" ".join(command), language="bash")
+
+    if not st.button("Mulai Training", type="primary", key="train_run_btn"):
+        return
+
+    st.info("Training dimulai. Output ditampilkan langsung di bawah ini.")
+    log_placeholder = st.empty()
+    log_lines: List[str] = []
+
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(PROJECT_ROOT),
+            env=build_runtime_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as exc:
+        st.error(f"Gagal memulai training: {exc}")
+        return
+
+    assert process.stdout is not None
+    for line in process.stdout:
+        log_lines.append(line.rstrip("\n"))
+        # Batasi tampilan agar UI tetap responsif.
+        log_placeholder.code("\n".join(log_lines[-400:]))
+    return_code = process.wait()
+
+    if return_code == 0:
+        st.success("Training selesai tanpa error.")
+    else:
+        st.error(f"Training selesai dengan kode keluar {return_code}. Periksa log di atas.")
+
+    summary_path = REPORT_ROOT / "_workflow_runs" / "latest_workflow_summary.csv"
+    summary_df = _read_csv(summary_path)
+    if not summary_df.empty:
+        st.markdown("**Ringkasan Workflow Terbaru**")
+        st.dataframe(summary_df, use_container_width=True)
+    st.caption("Lihat detail metrik & grafik pada tab 'Training Report'.")
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Parkinson Classification Dashboard",
@@ -1339,14 +1754,22 @@ def main() -> None:
     st.title("Parkinson Classification Dashboard")
     st.caption("Visualisasi dataset, report training bertingkat, perbandingan eksperimen, dan prediksi model.")
 
-    tab_dataset, tab_report, tab_predict = st.tabs([
+    tab_dataset, tab_training, tab_report, tab_predict = st.tabs([
         "Dataset",
+        "Training",
         "Training Report",
         "Prediksi",
     ])
 
     with tab_dataset:
         render_dataset_tab(dataset_registry)
+    with tab_training:
+        render_training_tab(
+            dataset_registry=dataset_registry,
+            model_registry=model_registry,
+            augmentation_registry=augmentation_registry,
+            method_registry=method_registry,
+        )
     with tab_report:
         render_report_tab(
             dataset_registry=dataset_registry,

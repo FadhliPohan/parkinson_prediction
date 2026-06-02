@@ -36,6 +36,7 @@ from src.reporting.report_writer import (
     write_latest_run_marker,
     write_run_manifest,
 )
+from src.optimizer import get_yolo_optimizer_name
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
@@ -419,6 +420,9 @@ def train_yolov8_once(
     total_epochs = max(1, int(args.epochs) + max(0, int(args.fine_tune_epochs)))
     mixed_precision_enabled = bool(args.mixed_precision and device != "cpu")
     use_train_augmentation = not bool(getattr(args, "disable_augmentation", False))
+    yolo_optimizer = get_yolo_optimizer_name(getattr(args, "optimizer", "adam"))
+    # REC-08: warmup tidak melebihi total epoch agar tetap valid pada sesi pendek.
+    warmup_epochs = min(3, max(0, total_epochs - 1))
 
     print("\n=== Training YOLOv8 ===")
     print("Model source             :", model_source)
@@ -426,6 +430,7 @@ def train_yolov8_once(
     print("Batch size               :", args.batch_size)
     print("Image size               :", args.image_size)
     print("Learning rate            :", args.learning_rate)
+    print("Optimizer                :", yolo_optimizer)
     print("Mixed precision          :", mixed_precision_enabled)
     print("Augmentasi train         :", "aktif" if use_train_augmentation else "nonaktif")
     print("Device aktif             :", "GPU" if device != "cpu" else "CPU")
@@ -442,6 +447,11 @@ def train_yolov8_once(
         imgsz=args.image_size,
         batch=args.batch_size,
         lr0=args.learning_rate,
+        lrf=0.01,                       # REC-08: LR final = lr0 * lrf (cosine decay)
+        cos_lr=True,                    # REC-08: cosine LR schedule
+        warmup_epochs=warmup_epochs,    # REC-08: warmup bertahap di awal
+        label_smoothing=0.1,            # REC-08: regularisasi untuk klasifikasi medis
+        optimizer=yolo_optimizer,       # T2: optimizer dari pipeline (Adam/SGD)
         dropout=args.dropout,
         patience=args.early_stopping_patience,
         workers=max(1, int(args.num_parallel_calls)),
@@ -999,6 +1009,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Kompatibilitas argumen dengan model lain (tidak dipakai langsung).",
     )
     parser.add_argument("--dropout", type=float, default=0.0, help="Dropout classifier head YOLOv8.")
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adam",
+        choices=["adam", "no_optimize"],
+        help="Optimizer training: adam (-> Adam) atau no_optimize (-> SGD plain baseline).",
+    )
     parser.add_argument(
         "--early-stopping-patience",
         type=int,

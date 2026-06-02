@@ -8,24 +8,32 @@ methods:
       no_pretrained: true
       fine_tune_epochs: 0
       mixed_precision: false
+      epochs: 30                   # REC: dari nol butuh lebih banyak epoch
+      early_stopping_patience: 10
 
   transfer_learning:
     description: "Transfer learning standar + fine-tuning bertahap."
     arg_overrides:
       no_pretrained: false
-      fine_tune_epochs: 2
+      fine_tune_epochs: 10
       mixed_precision: false
+      epochs: 25
+      early_stopping_patience: 8
 
   transfer_learning_mixed_precision:
     description: "Transfer learning + mixed precision untuk optimasi GPU."
     arg_overrides:
       no_pretrained: false
-      fine_tune_epochs: 2
+      fine_tune_epochs: 10
       mixed_precision: true
+      epochs: 25
+      early_stopping_patience: 8
 
   full_fine_tuning:
     description: "Transfer learning dengan fine-tuning lebih panjang."
     arg_overrides:
       no_pretrained: false
-      fine_tune_epochs: 6
+      fine_tune_epochs: 15
       mixed_precision: true
+      epochs: 25
+      early_stopping_patience: 10

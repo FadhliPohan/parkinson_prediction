@@ -16,7 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.registry import DatasetConfig, DatasetRegistry
-from src.datasets.splitter import split_dataset, validate_balanced_split_manifest
+from src.datasets.splitter import (
+    SPLIT_PRESETS,
+    resolve_split_cfg,
+    split_dataset,
+    validate_balanced_split_manifest,
+)
 from src.datasets.transforms import print_augmentation_summary
 from src.datasets.validator import discover_class_directories, list_image_files
 from src.models.registry import ModelConfig, ModelRegistry
@@ -375,6 +380,7 @@ def _collect_user_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         "learning_rate",
         "fine_tune_learning_rate",
         "dropout",
+        "optimizer",
         "early_stopping_patience",
         "seed",
         "max_per_class",
@@ -715,6 +721,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--check-first", action="store_true", help="Jalankan validasi dataset sebelum training")
     parser.add_argument("--split-first", action="store_true", help="Jalankan proses split dataset sebelum training")
+    parser.add_argument(
+        "--split-preset",
+        type=str,
+        default=None,
+        choices=sorted(SPLIT_PRESETS.keys()),
+        help="Preset rasio split dinamis saat --split-first (mis. 80-10-10, 70-15-15).",
+    )
+    parser.add_argument("--train-ratio", type=float, default=None, help="Override rasio train (0-1) saat --split-first.")
+    parser.add_argument("--test-ratio", type=float, default=None, help="Override rasio testing (0-1) saat --split-first.")
+    parser.add_argument("--val-ratio", type=float, default=None, help="Override rasio validation (0-1) saat --split-first.")
     parser.add_argument("--augment-info", action="store_true", help="Cetak info augmentasi train on-the-fly")
 
     parser.add_argument("--stop-on-error", action="store_true", help="Hentikan jika ada model gagal")
@@ -752,6 +768,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--fine-tune-learning-rate", type=float, default=None)
     parser.add_argument("--dropout", type=float, default=None)
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default=None,
+        choices=["adam", "no_optimize"],
+        help="Optimizer training: adam atau no_optimize (SGD plain baseline).",
+    )
     parser.add_argument("--early-stopping-patience", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
 
@@ -869,12 +892,24 @@ def main() -> None:
             should_resplit = _should_run_split(dataset_cfg=dataset_cfg, on_existing_split=args.on_existing_split)
             if should_resplit:
                 print("\n=== Split Dataset ===")
+                active_split_cfg = resolve_split_cfg(
+                    preset=args.split_preset,
+                    train=args.train_ratio,
+                    testing=args.test_ratio,
+                    validation=args.val_ratio,
+                    fallback=dataset_cfg.split,
+                )
+                print(
+                    "Rasio split: train={train:.2f} | testing={testing:.2f} | validation={validation:.2f}".format(
+                        **active_split_cfg
+                    )
+                )
                 split_manifest = split_dataset(
                     original_dir=dataset_cfg.original_path,
                     split_dir=dataset_cfg.split_path,
                     class_mode=dataset_cfg.class_mode,
                     extensions=dataset_cfg.valid_extensions,
-                    split_cfg=dataset_cfg.split,
+                    split_cfg=active_split_cfg,
                     resize_cfg=dataset_cfg.resize,
                     seed=int(user_overrides.get("seed", dataset_cfg.seed)),
                 )

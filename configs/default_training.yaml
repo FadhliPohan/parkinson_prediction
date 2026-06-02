@@ -1,13 +1,16 @@
 default_training:
   image_size: 224
   batch_size: 16
-  epochs: 8
-  fine_tune_epochs: 2
+  # REC-01/02/05: epoch & patience dinaikkan, LR fine-tune diperbesar agar
+  # konvergensi lebih optimal untuk medical imaging.
+  epochs: 25
+  fine_tune_epochs: 10
   fine_tune_freeze_ratio: 0.7
   learning_rate: 0.001
-  fine_tune_learning_rate: 0.00001
+  fine_tune_learning_rate: 0.00005
   dropout: 0.35
-  early_stopping_patience: 4
+  optimizer: adam            # T2: adam | no_optimize
+  early_stopping_patience: 8
   seed: 42
 
   max_per_class: null

@@ -10,7 +10,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.registry import DatasetRegistry
-from src.datasets.splitter import split_dataset, validate_balanced_split_manifest
+from src.datasets.splitter import (
+    SPLIT_PRESETS,
+    resolve_split_cfg,
+    split_dataset,
+    validate_balanced_split_manifest,
+)
 from src.datasets.validator import list_image_files
 
 
@@ -91,6 +96,16 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(ON_EXISTING_SPLIT_CHOICES),
         help="Perilaku jika folder split sudah ada: ask, resplit, atau skip.",
     )
+    parser.add_argument(
+        "--split-preset",
+        type=str,
+        default=None,
+        choices=sorted(SPLIT_PRESETS.keys()),
+        help="Preset rasio split dinamis (mis. 80-10-10 atau 70-15-15).",
+    )
+    parser.add_argument("--train-ratio", type=float, default=None, help="Override rasio train (0-1).")
+    parser.add_argument("--test-ratio", type=float, default=None, help="Override rasio testing (0-1).")
+    parser.add_argument("--val-ratio", type=float, default=None, help="Override rasio validation (0-1).")
     return parser
 
 
@@ -107,12 +122,26 @@ def main() -> None:
     seed = int(args.seed) if args.seed is not None else int(dataset_cfg.seed)
     class_mode = args.class_mode or dataset_cfg.class_mode
 
+    # Split dinamis: preset / rasio manual / fallback config dataset.
+    split_cfg = resolve_split_cfg(
+        preset=args.split_preset,
+        train=args.train_ratio,
+        testing=args.test_ratio,
+        validation=args.val_ratio,
+        fallback=dataset_cfg.split,
+    )
+
     print("\n=== Split Dataset ===")
     print("Dataset ID   :", dataset_id)
     print("Original dir :", original_dir)
     print("Split dir    :", split_dir)
     print("Class mode   :", class_mode)
     print("Seed         :", seed)
+    print(
+        "Rasio split  : train={train:.2f} | testing={testing:.2f} | validation={validation:.2f}".format(
+            **split_cfg
+        )
+    )
 
     if split_dir.exists():
         if args.on_existing_split == "resplit":
@@ -136,7 +165,7 @@ def main() -> None:
             split_dir=split_dir,
             class_mode=class_mode,
             extensions=dataset_cfg.valid_extensions,
-            split_cfg=dataset_cfg.split,
+            split_cfg=split_cfg,
             resize_cfg=dataset_cfg.resize,
             seed=seed,
         )

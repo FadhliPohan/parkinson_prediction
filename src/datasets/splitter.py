@@ -19,6 +19,86 @@ except AttributeError:
 ROTATION_MIN_DEGREES = -20.0
 ROTATION_MAX_DEGREES = 20.0
 
+# Preset rasio split dinamis (train, testing, validation).
+# Catatan: testing dan validation WAJIB sama besar agar split simetris
+# (lihat _compute_split_counts). Kedua preset di bawah memenuhi syarat itu.
+SPLIT_PRESETS: Dict[str, Dict[str, float]] = {
+    "80-10-10": {"train": 0.80, "testing": 0.10, "validation": 0.10},
+    "70-15-15": {"train": 0.70, "testing": 0.15, "validation": 0.15},
+}
+
+
+def validate_split_ratios(
+    train: float,
+    testing: float,
+    validation: float,
+    tolerance: float = 1e-6,
+) -> Dict[str, float]:
+    """Validasi rasio split dan kembalikan dict ternormalisasi.
+
+    Aturan:
+        - Setiap rasio harus > 0.
+        - Total train+testing+validation harus = 1.0 (dalam toleransi).
+        - testing harus sama dengan validation (kebijakan split simetris).
+
+    Raises:
+        ValueError: bila rasio tidak valid.
+    """
+    train_f = float(train)
+    testing_f = float(testing)
+    validation_f = float(validation)
+
+    if train_f <= 0 or testing_f <= 0 or validation_f <= 0:
+        raise ValueError("Setiap rasio split harus > 0.")
+
+    total = train_f + testing_f + validation_f
+    if abs(total - 1.0) > tolerance:
+        raise ValueError(
+            f"Total rasio split harus = 1.0 (100%), saat ini {total:.4f} "
+            f"(train={train_f}, testing={testing_f}, validation={validation_f})."
+        )
+
+    if abs(testing_f - validation_f) > tolerance:
+        raise ValueError(
+            "Rasio testing dan validation harus sama (split simetris), "
+            f"saat ini testing={testing_f}, validation={validation_f}."
+        )
+
+    return {"train": train_f, "testing": testing_f, "validation": validation_f}
+
+
+def resolve_split_cfg(
+    preset: Optional[str] = None,
+    train: Optional[float] = None,
+    testing: Optional[float] = None,
+    validation: Optional[float] = None,
+    fallback: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    """Tentukan konfigurasi split dari preset / rasio manual / fallback.
+
+    Prioritas: rasio manual lengkap > preset > fallback. Hasil divalidasi
+    dengan :func:`validate_split_ratios`.
+    """
+    if train is not None and testing is not None and validation is not None:
+        return validate_split_ratios(train, testing, validation)
+
+    if preset:
+        key = str(preset).strip()
+        if key not in SPLIT_PRESETS:
+            available = ", ".join(sorted(SPLIT_PRESETS.keys()))
+            raise ValueError(f"Preset split '{preset}' tidak dikenal. Tersedia: {available}")
+        cfg = SPLIT_PRESETS[key]
+        return validate_split_ratios(cfg["train"], cfg["testing"], cfg["validation"])
+
+    if fallback is not None:
+        return validate_split_ratios(
+            fallback.get("train", 0.0),
+            fallback.get("testing", 0.0),
+            fallback.get("validation", 0.0),
+        )
+
+    raise ValueError("Tidak ada konfigurasi split yang bisa ditentukan.")
+
 
 @dataclass(frozen=True)
 class SplitSample:

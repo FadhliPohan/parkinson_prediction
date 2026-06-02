@@ -134,6 +134,9 @@ Aktivitas:
 Aktivitas:
 1. Menjalankan `streamlit run web/app.py`.
 2. Dashboard membaca report dan model artifact.
+3. Dashboard kini memiliki 4 tab: **Dataset**, **Training** (training via web),
+   **Training Report** (metrik lengkap + ROC/AUC + download berfilter + overlay
+   perbandingan), dan **Prediksi**. Detail di `documentation/fitur_baru.md`.
 
 ### Pipeline 10 - Workflow training fleksibel (multi kombinasi)
 Aktivitas:

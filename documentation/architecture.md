@@ -41,6 +41,10 @@ parkinson_prediction/
 │  │  ├─ tensorflow_models/
 │  │  ├─ pytorch_models/
 │  │  └─ yolo_models/
+│  ├─ optimizer/                 # (baru) registry optimizer seragam
+│  │  ├─ __init__.py             # get_optimizer(), list_optimizers(), peta YOLO
+│  │  ├─ adam.py                 # wrapper Adam
+│  │  └─ no_optimize.py          # baseline SGD plain (pembanding)
 │  ├─ training/
 │  │  ├─ augmentations.py
 │  │  ├─ cli_args.py
@@ -242,6 +246,37 @@ python3 training/train.py \
 streamlit run web/app.py
 ```
 
-## 16. Catatan Sinkronisasi
+## 16. Registry Optimizer (baru)
+1. Optimizer terdaftar di `src/optimizer/` dengan antarmuka seragam:
+   `get_optimizer(name, learning_rate, **cfg)`.
+2. Optimizer aktif:
+   - `adam` — Adam adaptif (default).
+   - `no_optimize` — SGD plain tanpa tuning (baseline pembanding).
+3. Aliran optimizer ke pipeline:
+   - `configs/default_training.yaml` -> field `optimizer`.
+   - dilewatkan sebagai training param -> `--optimizer` -> worker.
+   - di `training_common.py` dipakai pada `build_model` (stage 1) dan recompile stage 2.
+   - untuk YOLO dipetakan ke optimizer Ultralytics via `get_yolo_optimizer_name`.
+4. Bisa dipilih dari CLI (`--optimizer`), config, dan menu Training di dashboard.
+
+## 17. Split Data Dinamis (baru)
+1. Preset terdaftar di `src/datasets/splitter.py` (`SPLIT_PRESETS`): `80-10-10`, `70-15-15`.
+2. Helper `validate_split_ratios` memastikan total = 100% dan `testing == validation`.
+3. Dipakai di `training/2.split_data_testing.py` dan `training/train.py`
+   via `--split-preset` atau `--train-ratio/--test-ratio/--val-ratio`.
+4. Seed tetap dikunci (default 42) agar reproducible.
+
+## 18. Penyempurnaan Training (rekomendasi diterapkan)
+1. Default epoch/patience dinaikkan, LR fine-tune diperbesar (lihat
+   `analisis_training_rekomendasi.md`).
+2. Callback (ModelCheckpoint/EarlyStopping/ReduceLROnPlateau) diselaraskan ke
+   `val_accuracy` dan dibuat baru per stage (state tidak terbawa antar stage).
+3. `class_weight` 'balanced' diterapkan saat `model.fit` untuk menekan bias kelas.
+4. Output layer di-set `dtype="float32"` agar stabil saat mixed precision.
+5. YOLO memakai cosine LR + warmup + label smoothing.
+6. **Catatan**: perbaikan strategi Transformer (pretrained/resep khusus) DITUNDA;
+   placeholder/TODO ada di kode dan dokumen rekomendasi (REC-09).
+
+## 19. Catatan Sinkronisasi
 1. `documentation/architecture.md` adalah sumber utama arsitektur.
 2. `documentation/arsitectur.md` adalah mirror isi agar kompatibel dengan penamaan lama.
