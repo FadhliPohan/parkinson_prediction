@@ -14,7 +14,7 @@ Audit ulang sebelum deployment menemukan **tiga isu yang TIDAK tercatat di versi
 |---|---|---|---|
 | **BLOCKER-01** | Double preprocessing di inference | **Aplikasi deploy memberi prediksi salah** untuk SEMUA model TF | ✅ **SUDAH DIPERBAIKI (2026-06-04)** |
 | **BLOCKER-02** | Data leakage: augmentasi rotasi sebelum split | **Metrik test/val tidak valid (inflated)** — sebagian test set berisi gambar sintetis | ✅ **SUDAH DIPERBAIKI (2026-06-04)** |
-| **BLOCKER-03** | Split per-gambar, bukan per-pasien | Potensi leakage jika 1 pasien punya >1 gambar | 🟠 TINGGI (perlu konfirmasi dataset) |
+| **BLOCKER-03** | Split per-gambar, bukan per-pasien | Potensi leakage jika 1 pasien punya >1 gambar | ✅ **TIDAK BERLAKU** (dikonfirmasi user 2026-06-04: tiap gambar independen) |
 | **DEP-01** | `requirements.txt` belum diverifikasi + `torch` tidak di-pin | Risiko gagal install / konflik CUDA di server | 🟠 TINGGI |
 | **ISU-07** | Transformer dilatih dari nol | Hasil family transformer tidak sebanding dengan CNN | 🟡 SEDANG |
 | **REC-06** | Cosine annealing untuk TF | Optimasi LR; peningkatan kecil | ⚪ RENDAH |
@@ -123,7 +123,10 @@ Fungsi `validate_balanced_split_manifest` ([splitter.py:290-329](src/datasets/sp
 
 ---
 
-### BLOCKER-03: Split Per-Gambar, Bukan Per-Pasien (🟠 TINGGI — perlu konfirmasi dataset)
+### BLOCKER-03: Split Per-Gambar, Bukan Per-Pasien (✅ TIDAK BERLAKU — dikonfirmasi 2026-06-04)
+
+> **Status:** Pengguna mengonfirmasi bahwa setiap file gambar di dataset (`dataset_merder`, 2 kelas Healthy/Parkinson, 1632 gambar/kelas) adalah **gambar independen** — bukan augmentasi/duplikat dari sumber yang sama, dan bukan beberapa gambar dari pasien yang sama. Karena itu split berbasis gambar (stratified) **sudah benar** dan perbaikan BLOCKER-02 sudah memadai untuk dataset ini. Tidak perlu split per-pasien. **Catatan penting:** sumber split harus tetap `dataset_merder` (independen), **bukan** `dataset/praprosesing/` (6528 = 1632×4, hasil augmentasi) — registry sudah benar mengarahkan `parkinson_merder` → `dataset_merder`.
+
 
 **Lokasi:** [splitter.py:382-395](src/datasets/splitter.py#L382-L395), [validator.py:40-50](src/datasets/validator.py#L40-L50).
 
@@ -205,6 +208,8 @@ Tidak merusak fungsi, tapi sebaiknya dibereskan agar mudah dipelihara dan tidak 
 | MINOR-04 | **CUDA path helper khusus Linux** | `configure_cuda_library_path()` di wrapper, mis. [resnet50.py:6-29](model/legacy_or_wrappers/resnet50.py#L6-L29) | `LD_LIBRARY_PATH` + `os.execvpe` hanya berlaku Linux (no-op di Windows). Tidak fatal, tapi tidak mengonfigurasi CUDA di Windows. |
 | MINOR-05 | **Path Chrome hardcoded** | [run.bat:11](run.bat#L11) | `C:\Program Files\Google\Chrome\...` — gagal di mesin tanpa Chrome di path itu. Hanya launcher, bukan fatal. |
 | MINOR-06 | **`.h5` & `.pt` non-YOLO tidak didukung di inference** | [model_loader.py:36-67](src/inference/model_loader.py#L36-L67) | Hanya `.keras` (TF) & `.pt` (diasumsikan YOLO). Konsisten dengan training saat ini, tapi catat keterbatasannya. |
+| DATA-01 | **`datasets.yaml` tidak cocok dengan folder nyata** | [configs/datasets.yaml:25,30](configs/datasets.yaml#L25) | `original_dir` tertulis `4_dataset_merder` & `6_dataset_mixing`, padahal folder nyata `dataset_merder` (dan `mixing` belum ada — file besar, sengaja belum ditambah). `parkinson_merder` masih jalan via auto-discovery, tapi `parkinson_mixing` akan **error** jika dipilih. Saran: samakan nama path dengan folder asli; nonaktifkan/komentari `parkinson_mixing` sampai foldernya ada. *(Belum diterapkan atas permintaan user.)* |
+| DATA-02 | **Split lama yang bocor masih ada di disk** | `dataset/split/{train,testing,validation}` (root) | Berisi file `*_rot0/_rot90/_rot180/_rot270` dari proses lama (rotasi tersebar di train, struktur & lokasi usang — bukan di `dataset/split/parkinson_merder/`). Hapus sebelum re-split agar tidak membingungkan. *(Belum diterapkan atas permintaan user.)* |
 | CATATAN-A | **Default `argparse` di script masih nilai lama** | `build_common_arg_parser` (epochs=8, fine_tune=2, LR FT=1e-5, patience=4) | Override YAML ([configs/default_training.yaml](configs/default_training.yaml)) sudah benar (25/10/5e-5/8) dan dipakai pada alur normal lewat `main.py`. Tapi siapa pun yang menjalankan script secara langsung TANPA layer YAML akan dapat nilai lama. Selaraskan default agar tidak menyesatkan. |
 
 ---
@@ -236,7 +241,7 @@ Urutan ini mengoptimalkan "hasil maksimal sebelum deploy" — dahulukan yang mem
 |---|---|---|---|---|
 | ✅ | ~~**BLOCKER-01** — hapus double preprocessing di inference~~ | **Rendah** | **Sangat Tinggi** | **SUDAH DIPERBAIKI 2026-06-04.** Tinggal verifikasi prob train==inference & latih/evaluasi ulang. |
 | **2** | **BLOCKER-02** — split dulu, balancing rotasi hanya di train | Sedang | **Sangat Tinggi** | Tanpa ini, semua metrik tidak bisa dipercaya. Wajib re-split + latih ulang setelahnya. |
-| **3** | **BLOCKER-03** — konfirmasi/implementasi split per-pasien | Rendah (cek) / Sedang (fix) | Tinggi | Cukup konfirmasi dataset dulu; implementasi hanya jika 1 pasien punya >1 gambar. |
+| ✅ | ~~**BLOCKER-03** — konfirmasi/implementasi split per-pasien~~ | Rendah | Tinggi | **TIDAK BERLAKU** (dikonfirmasi: tiap gambar independen). |
 | **4** | **DEP-01** — uji install di server bersih + pin `torch` | Rendah | Tinggi | Mencegah gagal deploy / konflik CUDA. |
 | **5** | **ISU-07** — Opsi C (nonaktifkan transformer) sekarang; Opsi A nanti | Rendah (C) / Tinggi (A) | Sedang | Cepat menutup hasil menyesatkan tanpa ubah kode. |
 | **6** | **MINOR-01..06 + ARCH-01..06 + CATATAN-A** | Rendah | Rendah | Kebersihan & maintainability; aman dikerjakan setelah deploy. |
@@ -256,7 +261,8 @@ Setelah itu baru kerjakan BLOCKER-02 (perlu re-split + retrain — makan waktu) 
 - [x] BLOCKER-01 diperbaiki (double preprocessing dihapus di `predictor.py`). ⏳ Sisa: verifikasi prob train == prob inference untuk gambar yang sama.
 - [ ] BLOCKER-02 diperbaiki: test & validation 0% gambar sintetis; tidak ada `source_path` lintas-split. Dataset di-split ulang.
 - [ ] Semua model di-latih ulang setelah BLOCKER-01 & 02 (metrik lama dibuang).
-- [ ] BLOCKER-03 dikonfirmasi (1 gambar/pasien) atau split per-pasien diimplementasikan.
+- [x] BLOCKER-03 dikonfirmasi: tiap gambar independen → split per-gambar valid (tidak perlu split per-pasien).
+- [ ] Re-split dari `dataset_merder` (BUKAN `dataset/praprosesing/`) + hapus split lama yang bocor di `dataset/split/{train,testing,validation}` (root).
 - [ ] `requirements.txt` lolos `pip install` di environment server bersih; `torch` di-pin.
 - [ ] Family transformer dinonaktifkan ATAU diberi catatan "tidak sebanding" di laporan.
 - [ ] Path `model_dir` di record valid di server target (ARCH-06).

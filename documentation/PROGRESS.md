@@ -23,7 +23,10 @@
 - [x] **BLOCKER-02** — Splitter ditulis ulang: split dulu, balancing train-only, test/val real-only
       (`src/datasets/splitter.py`, schema manifest 1.3.0). Validator jadi guard anti-leakage. Lulus uji dummy.
       ⏳ Sisa: hapus split lama + re-split + latih ulang semua model (split lama tercemar).
-- [ ] **BLOCKER-03** — Split per-gambar bukan per-pasien; konfirmasi 1 gambar/pasien atau buat split per-pasien.
+- [x] **BLOCKER-03** — Dikonfirmasi user (2026-06-04): tiap gambar `dataset_merder` independen → split
+      per-gambar valid, tidak perlu split per-pasien. Sumber split = `dataset_merder` (BUKAN `praprosesing` 4×).
+- [ ] **DATA-01/02** (belum dikerjakan, atas permintaan user): samakan `datasets.yaml` dgn folder nyata
+      + nonaktifkan `parkinson_mixing`; hapus split lama yang bocor di `dataset/split/{train,testing,validation}`.
 - [ ] **DEP-01** — Uji `pip install` di server bersih + pin `torch` di `requirements.txt`.
 - [ ] **ISU-07** — Transformer dari nol; opsi cepat: `enabled: false` vit/swin/deit di `configs/models.yaml`.
 
