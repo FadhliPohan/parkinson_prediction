@@ -122,8 +122,12 @@ parkinson_prediction/
    - **Transformer (3 model)**: `vit`, `swintransformer`, `deit`.
    - **YOLO (1 model)**: `yolov8`.
 6. Setiap `preprocess_key` di `configs/models.yaml` terdaftar di
-   `src/inference/predictor.py` (`MODEL_PREPROCESSORS`) untuk preprocessing
-   gambar saat inferensi.
+   `src/inference/predictor.py` (`MODEL_PREPROCESSORS`) sebagai dokumentasi
+   pemetaan preprocessing per-model. **Preprocessing TIDAK diterapkan lagi saat
+   inferensi**: layer `preprocess_input`/`Rescaling` sudah tertanam di dalam graph
+   model TF saat training (`training_common.py`), sehingga inference hanya memberi
+   piksel mentah RGB [0,255] dan model menormalisasi sendiri. Menerapkan ulang akan
+   menyebabkan double preprocessing (BLOCKER-01, sudah diperbaiki 2026-06-04).
 
 ## 7. Method Registry dan Training Strategy
 1. Method training terdaftar di `configs/training_methods.yaml`.

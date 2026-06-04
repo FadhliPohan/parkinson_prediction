@@ -1,638 +1,281 @@
 # Analisis Training & Rekomendasi — Parkinson Prediction
 
-> Dibuat: 2026-06-03
-> Reviewer: Claude Sonnet 4.6 (AI Code Expert — Python, Machine Learning, Computer Vision)
-> Status: **Dokumen rekomendasi — tidak ada perubahan kode**
+> Dibuat: 2026-06-03 | Diperbarui: 2026-06-04 (audit pra-deploy menyeluruh: code, alur, arsitektur)
+> Reviewer: Claude (AI Code Expert — Python, Machine Learning, Computer Vision)
+> Status: **3 deployment-blocker BARU ditemukan** + 2 isu lama masih terbuka. **Belum aman untuk deploy.**
+
+---
+
+## 0. PERINGATAN UTAMA (baca dulu sebelum deploy)
+
+Audit ulang sebelum deployment menemukan **tiga isu yang TIDAK tercatat di versi dokumen sebelumnya**, dua di antaranya membuat hasil aplikasi/eksperimen menjadi tidak valid secara diam-diam (tidak ada error, tapi salah):
+
+| Kode | Isu | Dampak | Prioritas |
+|---|---|---|---|
+| **BLOCKER-01** | Double preprocessing di inference | **Aplikasi deploy memberi prediksi salah** untuk SEMUA model TF | ✅ **SUDAH DIPERBAIKI (2026-06-04)** |
+| **BLOCKER-02** | Data leakage: augmentasi rotasi sebelum split | **Metrik test/val tidak valid (inflated)** — sebagian test set berisi gambar sintetis | 🔴 KRITIS |
+| **BLOCKER-03** | Split per-gambar, bukan per-pasien | Potensi leakage jika 1 pasien punya >1 gambar | 🟠 TINGGI (perlu konfirmasi dataset) |
+| **DEP-01** | `requirements.txt` belum diverifikasi + `torch` tidak di-pin | Risiko gagal install / konflik CUDA di server | 🟠 TINGGI |
+| **ISU-07** | Transformer dilatih dari nol | Hasil family transformer tidak sebanding dengan CNN | 🟡 SEDANG |
+| **REC-06** | Cosine annealing untuk TF | Optimasi LR; peningkatan kecil | ⚪ RENDAH |
+
+**Kesimpulan singkat:** Jangan deploy dulu. BLOCKER-01 dan BLOCKER-02 harus diperbaiki lebih dulu karena keduanya membuat sistem terlihat benar padahal salah. ISU-07 (fokus dokumen versi lama) sebenarnya prioritas lebih rendah dari ketiga blocker baru ini.
 
 ---
 
 ## 1. Ringkasan Eksekutif
 
-Project ini sudah menerapkan **early stopping** pada kedua framework (TensorFlow dan YOLO). Namun terdapat beberapa isu pada konfigurasi parameter default yang berpotensi menyebabkan training berhenti terlalu dini, model yang tersimpan tidak optimal, dan hasil eksperimen yang kurang reproducible untuk medical imaging.
+Pipeline training (parameter epoch, patience, LR, class weight, callback per-stage, float32 output) memang sudah jauh lebih solid — **9 dari 11 rekomendasi training awal terkonfirmasi sudah diimplementasikan dengan benar** (lihat §6). Namun fokus perbaikan sebelumnya hanya pada *training loop*. Audit pra-deploy ini memeriksa **seluruh alur end-to-end** — data split → augmentasi → training → penyimpanan model → inference di aplikasi web — dan menemukan bahwa **jembatan antara training dan inference rusak** (BLOCKER-01) serta **integritas data split tercemar** (BLOCKER-02). Keduanya tidak menimbulkan error, sehingga lolos dari review yang hanya melihat training loop.
 
-| Aspek | Status Saat Ini | Rekomendasi |
+Semua klaim "sudah diperbaiki" di versi dokumen sebelumnya **telah diverifikasi ulang terhadap kode aktual dan benar** (lihat tabel verifikasi §6), kecuali satu catatan kecil: nilai default `argparse` di dalam script masih nilai lama (lihat CATATAN-A).
+
+---
+
+## 2. Deployment Blockers (Temuan Baru — Prioritas Tertinggi)
+
+### BLOCKER-01: Double Preprocessing di Inference — Aplikasi Memberi Prediksi Salah (✅ SUDAH DIPERBAIKI 2026-06-04)
+
+> **Status perbaikan:** Pemanggilan ganda `preprocess_fn` telah dihapus di [predictor.py `prepare_tf_input`](src/inference/predictor.py#L29). Inference kini memberi piksel mentah RGB [0,255] dan membiarkan layer preprocessing di dalam model bekerja sekali. `MODEL_PREPROCESSORS` dipertahankan hanya sebagai dokumentasi (dengan catatan pengaman agar tidak diaktifkan kembali). **Tindak lanjut wajib:** evaluasi ulang / latih ulang model lalu verifikasi bahwa probabilitas train == probabilitas inference untuk gambar yang sama. Penjelasan di bawah dipertahankan sebagai catatan akar masalah.
+
+
+**Lokasi:**
+- Training (preprocessing ditanam di dalam graph model): [training_common.py:360-361](model/legacy_or_wrappers/training_common.py#L360-L361)
+- Model disimpan utuh termasuk layer preprocessing: [training_common.py:848](model/legacy_or_wrappers/training_common.py#L848)
+- Inference menerapkan preprocessing untuk KEDUA kalinya: [predictor.py:29-38](src/inference/predictor.py#L29-L38)
+
+**Akar masalah:**
+
+Saat training, `preprocess_fn` dijadikan **layer pertama di dalam model**:
+
+```python
+# training_common.py:360-361
+inputs = tf.keras.Input(shape=input_shape, name="input_image")
+x = preprocess_fn(inputs)          # <-- preprocessing JADI BAGIAN dari model
+x = base_model(x, training=False)
+```
+
+Model lalu disimpan utuh (`model.save(...)`, baris 848). Artinya file `.keras` yang tersimpan **sudah mengandung** langkah `preprocess_input` di dalamnya dan **mengharapkan input piksel mentah RGB [0, 255]**.
+
+Tetapi di inference, `prepare_tf_input` menerapkan `preprocess_input` **lagi** sebelum memanggil `model.predict`:
+
+```python
+# predictor.py:32-37
+array = np.asarray(image, dtype=np.float32)   # piksel mentah [0,255]
+batch = np.expand_dims(array, axis=0)
+preprocess_fn = MODEL_PREPROCESSORS.get(preprocess_key)
+if preprocess_fn is not None:
+    batch = preprocess_fn(batch)              # <-- preprocessing KEDUA, lalu masuk ke model yang sudah punya preprocessing
+```
+
+**Dampak:** Setiap model TF menerima input yang dinormalisasi **dua kali**. Contoh:
+- ResNet/VGG (caffe-style mean subtraction) → mean dikurangi dua kali, distribusi piksel jadi kacau.
+- ViT/transformer (`Rescaling 1/127.5 - 1`) → dipetakan ke ~[-1,1] lalu di-rescale lagi → keluar dari rentang yang dipelajari.
+
+Tidak ada error yang muncul — aplikasi tetap memberi label dan confidence — tetapi **input berbeda jauh dari distribusi training**, sehingga **prediksi di aplikasi yang akan di-deploy bisa sangat salah / acak**, meskipun metrik test saat training terlihat bagus. Ini adalah bug paling berbahaya dalam project ini karena terlihat berjalan normal.
+
+**Rekomendasi (pilih salah satu, konsisten train↔inference):**
+- **Opsi A (paling kecil & disarankan):** Hapus pemanggilan `preprocess_fn` di [predictor.py:35-37](src/inference/predictor.py#L35-L37). Karena model sudah memuat layer preprocessing, cukup feed piksel mentah RGB [0,255]. (Jalur YOLO sudah benar — ultralytics menangani preprocessing-nya sendiri.)
+- **Opsi B:** Keluarkan `preprocess_fn` dari graph model saat training (jangan jadikan layer), lalu preprocessing hanya di-input pipeline training + di inference. Lebih banyak perubahan, tidak disarankan.
+
+**Catatan penting:** Apa pun yang dipilih, **model lama yang sudah terlanjur dilatih harus dievaluasi ulang / dilatih ulang** setelah perbaikan, karena pemilihan threshold/checkpoint terbaik dilakukan saat training (tanpa double preprocess), sedangkan deployment (dengan double preprocess) memakai distribusi berbeda. **Verifikasi perbaikan**: jalankan satu gambar test yang sama lewat (a) evaluasi training dan (b) `predict_from_bundle`, pastikan probabilitas yang keluar identik.
+
+---
+
+### BLOCKER-02: Data Leakage — Augmentasi Rotasi Dilakukan SEBELUM Split (🔴 KRITIS)
+
+**Lokasi:** [splitter.py:217-238](src/datasets/splitter.py#L217-L238) (pembuatan sampel sintetis), dipanggil di [splitter.py:376-395](src/datasets/splitter.py#L376-L395) (split setelahnya).
+
+**Akar masalah:**
+
+Untuk menyeimbangkan kelas, splitter membuat salinan **rotasi** dari gambar kelas minoritas, lalu **menggabungkannya ke pool sebelum split**:
+
+```python
+# splitter.py:227-238 — sintetis dibuat dari file kelas, DI-MERGE ke base
+for _ in range(missing_count):
+    source_path = rng.choice(files)
+    angle = rng.uniform(ROTATION_MIN_DEGREES, ROTATION_MAX_DEGREES)
+    synthetic_samples.append(SplitSample(source_path=source_path, is_augmented=True, rotation_angle=angle))
+samples_per_class[class_name] = base_samples + synthetic_samples   # real + sintetis dalam satu pool
+
+# splitter.py:384-395 — pool (real+sintetis) baru di-shuffle & dibagi train/test/val
+shuffled = samples[:]; rng.shuffle(shuffled)
+train_samples = shuffled[:train_count]
+test_samples  = shuffled[train_count : train_count + test_count]
+validation_samples = shuffled[...]
+```
+
+Akibatnya, dua bentuk kebocoran terjadi sekaligus:
+
+1. **Gambar sintetis masuk ke test & validation.** Kode bahkan menghitungnya secara eksplisit (`augmented_test_count`, `augmented_validation_count` di [splitter.py:397-399](src/datasets/splitter.py#L397-L399)) dan benar-benar menulis file rotasi ke folder `testing/` dan `validation/` ([splitter.py:434-439](src/datasets/splitter.py#L434-L439)). Artinya **metrik test diukur sebagian pada gambar sintetis** — secara metodologis tidak valid untuk model medis.
+2. **Versi rotasi dari gambar yang sama bisa berada di train sekaligus test/val.** Karena `rng.choice(files)` memilih dari gambar asli, salinan rotasi gambar X bisa masuk test sementara X asli ada di train → kebocoran langsung → metrik **inflated**.
+
+Fungsi `validate_balanced_split_manifest` ([splitter.py:290-329](src/datasets/splitter.py#L290-L329)) hanya mengecek **keseimbangan jumlah** dan malah **mewajibkan** `testing == validation`; ia tidak mendeteksi kebocoran ini sama sekali — memberi rasa aman palsu.
+
+**Dampak:** Semua angka akurasi/AUC pada test set saat ini **tidak bisa dipercaya** (cenderung lebih tinggi dari kenyataan). Untuk model medis ini fatal karena keputusan deploy didasarkan pada metrik yang bias.
+
+**Rekomendasi:**
+- **Split dulu, augmentasi/balancing belakangan, dan HANYA di train.** Urutan benar: (1) split gambar **asli** ke train/test/val; (2) lakukan balancing rotasi **hanya pada train**; (3) test & validation tetap 100% gambar asli, tanpa sintetis.
+- Setelah perbaikan, **re-split** semua dataset dan latih ulang. Metrik lama harus dianggap tidak valid.
+- (Opsional) Tambahkan validasi yang benar-benar mendeteksi kebocoran: pastikan tidak ada `source_path` yang sama muncul di lebih dari satu split, dan `augmented_test_count == 0` dan `augmented_validation_count == 0`.
+
+---
+
+### BLOCKER-03: Split Per-Gambar, Bukan Per-Pasien (🟠 TINGGI — perlu konfirmasi dataset)
+
+**Lokasi:** [splitter.py:382-395](src/datasets/splitter.py#L382-L395), [validator.py:40-50](src/datasets/validator.py#L40-L50).
+
+Split bekerja pada level **file gambar individual** di dalam folder kelas — tidak ada konsep identitas pasien/subjek. Ini adalah bug klasik medical imaging: jika satu pasien menyumbang **lebih dari satu gambar** (mis. beberapa gambar spiral/gelombang per subjek), gambar-gambar mirip dari pasien yang sama bisa tersebar di train DAN test → akurasi inflated.
+
+**Rekomendasi:**
+- **Konfirmasi dulu:** apakah setiap file di dataset berasal dari subjek/pasien yang berbeda (independen)? 
+  - Jika **ya** (satu gambar per pasien) → BLOCKER-03 tidak berlaku, cukup dokumentasikan asumsi ini.
+  - Jika **tidak** → implementasikan split berbasis grup (subject-aware / `GroupKFold`-style): semua gambar satu pasien harus berada di split yang sama. Ini membutuhkan parsing ID pasien dari nama file/struktur folder.
+
+---
+
+### DEP-01: Verifikasi Dependency & Pin `torch` (🟠 TINGGI)
+
+**Lokasi:** [requirements.txt](requirements.txt)
+
+```
+tensorflow[and-cuda]==2.21.0
+numpy==2.4.4
+pandas==3.0.2
+scikit-learn==1.8.0
+pillow==12.2.0
+streamlit==1.56.0
+ultralytics==8.3.161
+```
+
+Catatan:
+1. **Versi sudah di-pin (bagus).** Namun **wajib diuji `pip install` di environment server yang bersih** sebelum deploy — pastikan semua versi ini benar-benar tersedia dan kompatibel satu sama lain pada platform target (terutama `tensorflow[and-cuda]` + `numpy 2.x`).
+2. **`torch` tidak di-pin.** Jalur YOLO ([yolov8.py](model/legacy_or_wrappers/yolov8.py) dan inference YOLO) butuh `torch`, tapi hanya `ultralytics` yang tercantum. `torch` ikut transitif tapi versinya dibiarkan bebas → build CUDA/CPU bisa berubah-ubah. **Pin `torch` secara eksplisit.**
+3. **Dua toolchain CUDA dalam satu env:** `tensorflow[and-cuda]` + `ultralytics`(→torch+CUDA) → image sangat besar dan berisiko konflik cuDNN/CUDA. Untuk **server inference**, pertimbangkan TF CPU-only + torch CPU-only (inference tidak butuh CUDA seberat training), atau pisahkan environment training vs serving.
+
+---
+
+## 3. Isu Lama yang Masih Terbuka (terkonfirmasi)
+
+### ISU-07: Transformer Selalu Dilatih dari Nol (🟡 SEDANG)
+
+**Terkonfirmasi masih berlaku.** Builder di [transformer_backbones.py](model/legacy_or_wrappers/transformer_backbones.py) menerima argumen `weights` tetapi hanya meneruskannya ke validator (`_validate_builder_args`, baris 11-27) yang sekadar mengecek nilainya `None`/`"imagenet"` — **nilai itu tidak pernah dipakai memuat bobot apa pun**. ViT/Swin/DeiT selalu random init.
+
+Konsekuensi: pada Stage 1 backbone dibekukan (`base_model.trainable = False`, [training_common.py:358](model/legacy_or_wrappers/training_common.py#L358)) sehingga head dilatih di atas fitur **acak** → praktis tidak belajar. Method `baseline`, `transfer_learning`, dan `full_fine_tuning` menghasilkan hasil yang nyaris sama untuk transformer. Hasil family transformer **tidak sebanding** dengan CNN pretrained.
+
+**Catatan prioritas:** Meskipun di dokumen lama ini diberi label "KRITIS", untuk **keputusan deploy** isu ini sebenarnya lebih rendah dari BLOCKER-01/02 — ia hanya membuat sebagian baris eksperimen tidak kompetitif, tidak merusak model CNN/YOLO yang akan dipakai produksi.
+
+**Rekomendasi (sama seperti sebelumnya):**
+- **Opsi A (terbaik):** Ganti builder custom dengan transformer pretrained (`keras-cv`, HuggingFace `transformers`, atau `tfimm`/`timm`) agar transfer learning benar-benar aktif.
+- **Opsi B:** Jika tetap dari nol — jangan bekukan backbone di Stage 1, naikkan epoch (50–150), tambah augmentasi kuat (RandAugment, Mixup/CutMix) + AdamW + warmup + cosine.
+- **Opsi C (cepat, tanpa ubah kode):** Set `enabled: false` untuk `vit`, `swintransformer`, `deit` di [configs/models.yaml](configs/models.yaml) sampai strategi pretrained siap, agar laporan tidak menyertakan hasil yang menyesatkan.
+
+---
+
+### REC-06: Cosine Annealing untuk TF (⚪ RENDAH)
+
+`ReduceLROnPlateau` ([training_common.py:787-793](model/legacy_or_wrappers/training_common.py#L787-L793)) sudah lebih konservatif (`factor=0.5`, monitor `val_accuracy`) sehingga severity rendah. Cosine annealing (`tf.keras.optimizers.schedules.CosineDecay`) lebih smooth/proaktif, tapi peningkatannya kecil. YOLO sudah pakai cosine LR (`cos_lr=True`). **Bukan prioritas pra-deploy.**
+
+---
+
+## 4. Temuan Arsitektur & Maintainability
+
+Tidak merusak fungsi, tapi sebaiknya dibereskan agar mudah dipelihara dan tidak menyesatkan saat di-deploy/serah-terima.
+
+| Kode | Temuan | Lokasi | Catatan |
+|---|---|---|---|
+| ARCH-01 | **Folder `legacy_or_wrappers` salah nama** | [model/legacy_or_wrappers/](model/legacy_or_wrappers/) | Meskipun bernama "legacy", inilah satu-satunya backend training yang benar-benar dieksekusi (dipanggil sebagai subprocess via `script_path` di [models.yaml](configs/models.yaml)). Nama ini membingungkan. |
+| ARCH-02 | **Direktori model kosong (dead scaffolding)** | [src/models/pytorch_models/](src/models/pytorch_models/), [src/models/tensorflow_models/](src/models/tensorflow_models/), [src/models/yolo_models/](src/models/yolo_models/) | Hanya `__init__.py` kosong, tidak di-import siapa pun. Hapus atau isi. |
+| ARCH-03 | **`augmentation_selected/` adalah kode duplikat/mati** | [augmentation_selected/](augmentation_selected/) | Trainer mengambil augmentasi dari [src/datasets/transforms.py](src/datasets/transforms.py), bukan dari sini. Membingungkan karena seakan-akan ini sumber augmentasi. |
+| ARCH-04 | **`model/hog_ghog/` tidak di jalur eksekusi** | [model/hog_ghog/](model/hog_ghog/) | Eksperimen ML klasik, tidak terdaftar di `models.yaml`/`train.py`. Pastikan ini memang tidak ikut deploy. |
+| ARCH-05 | **Coupling dua arah worker ↔ src** | [training_common.py](model/legacy_or_wrappers/training_common.py), [src/optimizer/](src/optimizer/) | `src.training` shell-out ke script worker, sementara script worker `import from src.optimizer`. Refactor satu sisi memaksa menyentuh sisi lain. |
+| ARCH-06 | **Path absolut `model_dir` tertanam di record training** | record/manifest hasil training | [web/app.py](web/app.py) mengecek `model_dir.exists()`. Jika project dipindah/dilatih di mesin lain, path absolut lama tidak ada → model tak terbaca. Saat deploy, re-root path atau latih ulang di server. |
+
+---
+
+## 5. Temuan Minor (Low Severity)
+
+| Kode | Temuan | Lokasi | Rekomendasi |
+|---|---|---|---|
+| MINOR-01 | **Interpolasi resize beda train vs inference** | train bilinear [training_common.py:258](model/legacy_or_wrappers/training_common.py#L258) vs PIL default (BICUBIC) [predictor.py:31](src/inference/predictor.py#L31) | Samakan interpolasi agar konsisten. Dampak kecil tapi gratis diperbaiki. |
+| MINOR-02 | **`Image.open` preview tanpa try/except** | [web/app.py preview upload](web/app.py) | Upload gambar korup bisa meng-crash tab (di luar blok try per-model). Bungkus dengan error handling. |
+| MINOR-03 | **Asumsi kelas positif biner rapuh** | [predictor.py:49-53](src/inference/predictor.py#L49-L53) | Output sigmoid tunggal diasumsikan `[1-p, p]` dengan kelas positif = `class_names[1]` (kelas urutan-alfabet ke-2). Benar untuk `healthy`/`parkinson`, tapi tidak terdokumentasi & rapuh. Dokumentasikan/eksplisitkan. |
+| MINOR-04 | **CUDA path helper khusus Linux** | `configure_cuda_library_path()` di wrapper, mis. [resnet50.py:6-29](model/legacy_or_wrappers/resnet50.py#L6-L29) | `LD_LIBRARY_PATH` + `os.execvpe` hanya berlaku Linux (no-op di Windows). Tidak fatal, tapi tidak mengonfigurasi CUDA di Windows. |
+| MINOR-05 | **Path Chrome hardcoded** | [run.bat:11](run.bat#L11) | `C:\Program Files\Google\Chrome\...` — gagal di mesin tanpa Chrome di path itu. Hanya launcher, bukan fatal. |
+| MINOR-06 | **`.h5` & `.pt` non-YOLO tidak didukung di inference** | [model_loader.py:36-67](src/inference/model_loader.py#L36-L67) | Hanya `.keras` (TF) & `.pt` (diasumsikan YOLO). Konsisten dengan training saat ini, tapi catat keterbatasannya. |
+| CATATAN-A | **Default `argparse` di script masih nilai lama** | `build_common_arg_parser` (epochs=8, fine_tune=2, LR FT=1e-5, patience=4) | Override YAML ([configs/default_training.yaml](configs/default_training.yaml)) sudah benar (25/10/5e-5/8) dan dipakai pada alur normal lewat `main.py`. Tapi siapa pun yang menjalankan script secara langsung TANPA layer YAML akan dapat nilai lama. Selaraskan default agar tidak menyesatkan. |
+
+---
+
+## 6. Verifikasi Klaim "Sudah Diperbaiki" (semua diperiksa ulang ke kode aktual)
+
+| Aspek | Klaim | Verifikasi terhadap kode |
 |---|---|---|
-| Early Stopping TF | **Ada** — `val_loss`, patience=4 | Naikkan patience, selaraskan metric |
-| Early Stopping YOLO | **Ada** — built-in patience=4 | Naikkan patience |
-| Jumlah Epoch | Terlalu kecil (8 epoch) | Minimal 20–30 epoch |
-| Callback Stage 2 | Objek tidak direset | Buat callback baru per stage |
-| Monitoring Metric | Inkonsisten (EarlyStopping vs Checkpoint) | Selaraskan ke `val_accuracy` |
-| LR Fine-tuning | 1e-5 terlalu konservatif | Sesuaikan per backbone |
-| **Transformer (ViT/Swin/DeiT)** | **Selalu dari nol — bobot ImageNet diabaikan** | Pakai pretrained / epoch jauh lebih banyak / unfreeze sejak awal |
-| Class weight (imbalance) | Tidak dipakai di loss | Pertimbangkan `class_weight` |
-| Mixed precision | Output layer tidak `float32` | Set `dtype="float32"` di layer akhir |
+| Callback baru per stage | `_build_stage_callbacks()` dibuat baru tiap stage | ✅ CONFIRMED — [training_common.py:768-794](model/legacy_or_wrappers/training_common.py#L768-L794), dipanggil terpisah stage 1 (baris 817) & stage 2 (baris 842) |
+| Monitoring seragam | Semua `val_accuracy` | ✅ CONFIRMED — ModelCheckpoint/EarlyStopping/ReduceLROnPlateau semua `monitor="val_accuracy"` |
+| ReduceLROnPlateau factor | 0.3 → 0.5 | ✅ CONFIRMED — baris 787-793 |
+| Class weight di kedua stage | `compute_class_weight_map()` + `class_weight=` | ✅ CONFIRMED — dihitung baris 763, dipakai di `fit` stage 1 (818) & stage 2 (843) |
+| Output dtype float32 | Eksplisit `dtype="float32"` | ✅ CONFIRMED — baris 369 & 371 |
+| Pretrained CNN | `weights="imagenet" if use_pretrained` | ✅ CONFIRMED — baris 338; CNN Keras-applications benar memuat ImageNet |
+| ResNeXt50 random init | Custom, tanpa pretrained | ✅ CONFIRMED — [resnext_backbones.py](model/legacy_or_wrappers/resnext_backbones.py) menolak `weights="imagenet"`, fallback ke random |
+| YOLO param | `lrf=0.01`, `cos_lr=True`, `warmup_epochs`, `label_smoothing=0.1`, epochs digabung | ✅ CONFIRMED — [yolov8.py:420,444-467](model/legacy_or_wrappers/yolov8.py#L444-L467) |
+| Augmentasi on-the-fly train-only | Augmentasi runtime hanya di train_ds | ✅ CONFIRMED — val/test tidak diaugmentasi ([training_common.py:715-755](model/legacy_or_wrappers/training_common.py#L715-L755)). ⚠️ TAPI lihat BLOCKER-02: augmentasi *offline di splitter* bocor ke test/val |
+| Epoch/patience/LR config | 25/10/8/5e-5 | ✅ CONFIRMED di YAML — ⚠️ tapi default argparse masih lama (CATATAN-A) |
+
+Catatan alur arsitektur (terkonfirmasi): `run.bat` → `main.py` (menu) → subprocess `training/train.py` → `src/training/trainer.py` (dispatch by framework) → subprocess `model/legacy_or_wrappers/<model>.py` → `training_common.run_training_pipeline()`. Inference: `streamlit run web/app.py` → `src/inference/`. `src/models/registry.py` membaca `configs/models.yaml` (single source of truth, tidak ada duplikasi config).
 
 ---
 
-## 2. Status Implementasi Early Stopping
+## 7. Prioritas Pengerjaan (Disarankan)
 
-### 2.1 TensorFlow Models (CNN & Transformer)
+Urutan ini mengoptimalkan "hasil maksimal sebelum deploy" — dahulukan yang membuat sistem **diam-diam salah**, lalu yang membuat hasil **tidak sebanding**, lalu kosmetik.
 
-File: `model/legacy_or_wrappers/training_common.py`, baris 751–773
+| # | Item | Effort | Dampak | Kenapa urutan ini |
+|---|---|---|---|---|
+| ✅ | ~~**BLOCKER-01** — hapus double preprocessing di inference~~ | **Rendah** | **Sangat Tinggi** | **SUDAH DIPERBAIKI 2026-06-04.** Tinggal verifikasi prob train==inference & latih/evaluasi ulang. |
+| **2** | **BLOCKER-02** — split dulu, balancing rotasi hanya di train | Sedang | **Sangat Tinggi** | Tanpa ini, semua metrik tidak bisa dipercaya. Wajib re-split + latih ulang setelahnya. |
+| **3** | **BLOCKER-03** — konfirmasi/implementasi split per-pasien | Rendah (cek) / Sedang (fix) | Tinggi | Cukup konfirmasi dataset dulu; implementasi hanya jika 1 pasien punya >1 gambar. |
+| **4** | **DEP-01** — uji install di server bersih + pin `torch` | Rendah | Tinggi | Mencegah gagal deploy / konflik CUDA. |
+| **5** | **ISU-07** — Opsi C (nonaktifkan transformer) sekarang; Opsi A nanti | Rendah (C) / Tinggi (A) | Sedang | Cepat menutup hasil menyesatkan tanpa ubah kode. |
+| **6** | **MINOR-01..06 + ARCH-01..06 + CATATAN-A** | Rendah | Rendah | Kebersihan & maintainability; aman dikerjakan setelah deploy. |
+| **7** | **REC-06** — cosine annealing TF | Sedang | Rendah | Peningkatan marjinal; opsional. |
 
-```python
-# Stage 1 — callbacks yang dipakai
-callbacks = [
-    checkpoint_callback,                          # simpan best val_accuracy
-    tf.keras.callbacks.EarlyStopping(
-        monitor="val_loss",                        # monitor val_loss
-        patience=args.early_stopping_patience,     # default: 4
-        restore_best_weights=True,
-        verbose=1,
-    ),
-    tf.keras.callbacks.ReduceLROnPlateau(
-        monitor="val_loss",
-        factor=0.3,
-        patience=max(1, args.early_stopping_patience // 2),  # default: 2
-        verbose=1,
-    ),
-]
+**Langkah cepat hari ini (tanpa risiko besar):**
+1. Perbaiki BLOCKER-01 (hapus 3 baris preprocessing di [predictor.py:35-37](src/inference/predictor.py#L35-L37)) — lalu uji 1 gambar train↔inference harus identik.
+2. Set `enabled: false` untuk vit/swintransformer/deit di [configs/models.yaml](configs/models.yaml) (ISU-07 Opsi C).
+3. Pin `torch` di [requirements.txt](requirements.txt) dan uji `pip install` di env bersih.
 
-# Stage 2 (fine-tuning) — menggunakan OBJEK CALLBACK YANG SAMA
-history_stage2 = model.fit(
-    train_ds, validation_data=val_ds,
-    epochs=args.fine_tune_epochs,
-    callbacks=callbacks,    # <-- sama persis dengan stage 1
-    verbose=1,
-).history
-```
-
-**Kesimpulan:** Early stopping **sudah ada** tetapi mengandung beberapa isu teknis yang dijelaskan di bagian 3.
-
-> **Catatan penting (hasil verifikasi):** Model **CNN** (MobileNetV2, ResNet50/152, VGG16, VGG19, EfficientNet, DenseNet121, Inception) memanggil `tf.keras.applications.*` sebagai `backbone_builder`, sehingga benar-benar memuat bobot **ImageNet** saat `use_pretrained=True`.
-> **ResNeXt50** menggunakan implementasi kustom (`resnext_backbones.py`) yang **tidak memiliki bobot pretrained**; backbone selalu diinisialisasi secara acak — training_common.py menangani fallback ini secara otomatis melalui `try/except`. Efek di setiap method: ResNeXt50 berperilaku seperti `baseline` (random init) terlepas dari method yang dipilih, mirip dengan family transformer (ISU-07).
->
-> Sebaliknya, model **Transformer** (ViT, SwinTransformer, DeiT) memakai builder custom di `model/legacy_or_wrappers/transformer_backbones.py` (`build_vit_backbone`, `build_swin_transformer_backbone`, `build_deit_backbone`). Builder ini **mengabaikan argumen `weights`** dan **selalu membangun arsitektur dari nol (random init)** — tidak ada bobot pretrained. Akibatnya transfer learning tidak berlaku untuk transformer (lihat ISU-07).
+Setelah itu baru kerjakan BLOCKER-02 (perlu re-split + retrain — makan waktu) sebagai gerbang terakhir sebelum benar-benar deploy.
 
 ---
 
-### 2.2 YOLOv8
+## 8. Checklist Sebelum Deploy
 
-File: `model/legacy_or_wrappers/yolov8.py`, baris 439–457
-
-```python
-train_result = model.train(
-    data=str(data_dir),
-    epochs=total_epochs,            # epochs + fine_tune_epochs digabung
-    patience=args.early_stopping_patience,  # default: 4
-    ...
-)
-```
-
-**Kesimpulan:** Early stopping **sudah ada** melalui mekanisme bawaan Ultralytics. Namun tidak ada pemisahan stage 1 dan stage 2 pada YOLO — semua epoch digabung menjadi satu sesi training.
+- [x] BLOCKER-01 diperbaiki (double preprocessing dihapus di `predictor.py`). ⏳ Sisa: verifikasi prob train == prob inference untuk gambar yang sama.
+- [ ] BLOCKER-02 diperbaiki: test & validation 0% gambar sintetis; tidak ada `source_path` lintas-split. Dataset di-split ulang.
+- [ ] Semua model di-latih ulang setelah BLOCKER-01 & 02 (metrik lama dibuang).
+- [ ] BLOCKER-03 dikonfirmasi (1 gambar/pasien) atau split per-pasien diimplementasikan.
+- [ ] `requirements.txt` lolos `pip install` di environment server bersih; `torch` di-pin.
+- [ ] Family transformer dinonaktifkan ATAU diberi catatan "tidak sebanding" di laporan.
+- [ ] Path `model_dir` di record valid di server target (ARCH-06).
+- [ ] Uji end-to-end: upload gambar di web app → label & confidence masuk akal untuk kasus known healthy & known parkinson.
 
 ---
 
-## 3. Isu yang Ditemukan
+## 9. Catatan untuk Medical Imaging (Parkinson)
 
-### ISU-01: Patience Terlalu Kecil Relatif Terhadap Jumlah Epoch
-
-**Lokasi:** `configs/default_training.yaml`
-
-```yaml
-epochs: 8
-early_stopping_patience: 4   # 50% dari total epoch
-```
-
-**Dampak:**
-- Dengan 8 epoch dan patience 4, training bisa berhenti di epoch ke-5 jika tidak ada improvement sejak epoch 1.
-- Pada model besar (ResNet152, DenseNet121, ViT, SwinTransformer), bobot ImageNet perlu epoch lebih banyak untuk adaptasi ke domain medical imaging (spiral Parkinson).
-- Dengan rasio patience/epoch = 50%, separuh waktu training bisa terbuang untuk "menunggu" sebelum model benar-benar konvergen.
-
-**Standar umum:** patience sebaiknya 15–25% dari total epoch yang direncanakan, bukan 50%.
+1. **Integritas split adalah segalanya.** BLOCKER-02 (sintetis bocor ke test) dan BLOCKER-03 (split per-gambar) keduanya menggelembungkan metrik. Untuk model medis, metrik yang jujur lebih penting daripada metrik yang tinggi.
+2. **Konsistensi train↔inference (BLOCKER-01).** Pipeline preprocessing harus identik byte-for-byte antara training dan deployment. Ini sumber #1 "akurasi training bagus tapi produksi jelek".
+3. **Kelas imbalanced** — `class_weight` sudah aktif di kedua stage (✅), membantu menekan false negative (penderita terklasifikasi sehat). Pertahankan, tapi balancing harus train-only (BLOCKER-02).
+4. **Fitur subtle** — spiral tremor halus, tidak ada di ImageNet; fine-tuning 10 epoch @ 5e-5 sudah memadai untuk CNN. Transformer from-scratch tidak akan cukup pada dataset kecil (ISU-07).
+5. **Reproducibility** — seed sudah konsisten di semua framework (✅).
+6. **Jangan bandingkan transformer dengan CNN pretrained** sampai ISU-07 selesai.
 
 ---
 
-### ISU-02: Inkonsistensi Monitoring Metric antara EarlyStopping dan ModelCheckpoint
+## 10. Kesimpulan
 
-**Lokasi:** `model/legacy_or_wrappers/training_common.py`, baris 751–758
+Training loop sudah solid dan 9 perbaikan awal terkonfirmasi benar. Namun **project belum aman untuk deploy** karena audit end-to-end menemukan tiga isu yang sebelumnya luput — dan dua di antaranya (double preprocessing & data leakage) membuat sistem **terlihat benar padahal salah**, tanpa error apa pun.
 
-```python
-checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-    monitor="val_accuracy",   # simpan model terbaik berdasarkan val_accuracy
-    mode="max",
-    save_best_only=True,
-)
-tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss",       # hentikan training berdasarkan val_loss
-    restore_best_weights=True,
-)
-```
+Prioritas sebelum deploy, berurutan: **(1) BLOCKER-01 double preprocessing** → **(2) BLOCKER-02 leakage augmentasi** → **(3) BLOCKER-03 split per-pasien** → **(4) DEP-01 dependency** → baru hal-hal lain. ISU-07 (transformer), yang sebelumnya dianggap "kritis", sebenarnya berdampak lebih rendah terhadap deployment dan cukup ditutup sementara dengan Opsi C.
 
-**Dampak:**
-- `ModelCheckpoint` menyimpan bobot terbaik berdasarkan **val_accuracy**.
-- `EarlyStopping` me-restore bobot berdasarkan **val_loss** terbaik.
-- Kedua kondisi ini **tidak selalu sama**. Epoch dengan val_accuracy tertinggi belum tentu memiliki val_loss terendah.
-- Hasil akhir: model yang dimuat dari `best_model.keras` (checkpoint) bisa berbeda dengan model yang ada di memori setelah EarlyStopping.
-- Setelah training selesai, kode mengambil model dari `best_model.keras` (baris 811–817), yang berarti bobot yang digunakan pada evaluasi adalah dari checkpoint (val_accuracy), bukan dari EarlyStopping restore (val_loss). Ini membingungkan dan berpotensi tidak konsisten antar run.
-
----
-
-### ISU-03: State Callback Tidak Direset antara Stage 1 dan Stage 2
-
-**Lokasi:** `model/legacy_or_wrappers/training_common.py`, baris 800–808
-
-```python
-# Stage 2 menggunakan objek callback yang sama dengan Stage 1
-history_stage2 = model.fit(
-    train_ds,
-    validation_data=val_ds,
-    epochs=args.fine_tune_epochs,
-    callbacks=callbacks,   # objek lama, state lama
-    verbose=1,
-).history
-```
-
-**Dampak:**
-- Objek `EarlyStopping` menyimpan state internal: `best` (nilai terbaik yang pernah dilihat), `wait` (counter epoch tanpa improvement), dan `stopped_epoch`.
-- Jika Stage 1 berakhir dengan `wait=3` (hampir trigger), Stage 2 akan langsung berhenti setelah 1 epoch pertama tanpa improvement — bahkan jika model baru saja mulai fine-tuning.
-- Objek `ReduceLROnPlateau` juga tidak direset: LR yang sudah turun di akhir Stage 1 akan tetap pada nilai rendah di awal Stage 2.
-
----
-
-### ISU-04: YOLO Tidak Memiliki Two-Stage Training
-
-**Lokasi:** `model/legacy_or_wrappers/yolov8.py`, baris 419
-
-```python
-total_epochs = max(1, int(args.epochs) + max(0, int(args.fine_tune_epochs)))
-```
-
-**Dampak:**
-- Parameter `fine_tune_epochs` hanya dijumlahkan ke total epoch — tidak ada pemisahan antara feature extraction dan fine-tuning.
-- Argumen `--fine-tune-learning-rate` dan `--fine-tune-freeze-ratio` tidak digunakan di YOLO (dicatat sebagai kompatibilitas saja).
-- User yang mengira ada dua stage fine-tuning di YOLO akan mendapat hasil yang berbeda dengan ekspektasi.
-
----
-
-### ISU-05: Learning Rate Fine-Tuning Terlalu Konservatif untuk Sesi Pendek
-
-**Lokasi:** `configs/default_training.yaml`
-
-```yaml
-fine_tune_learning_rate: 0.00001   # 1e-5
-fine_tune_epochs: 2                 # hanya 2 epoch
-```
-
-**Dampak:**
-- Dengan LR 1e-5 dan hanya 2 epoch fine-tuning, perubahan bobot sangat kecil — hampir tidak ada dampak yang signifikan dari fine-tuning.
-- Untuk backbone dengan ratusan layer (ResNet152 memiliki 152 layer, DenseNet121 memiliki 121 layer), LR 1e-5 dalam 2 epoch hampir setara dengan tidak melakukan fine-tuning sama sekali.
-- Ini membuat metode `transfer_learning` dan `full_fine_tuning` menghasilkan model yang hampir identik dengan `baseline` dalam hal eksplorasi bobot backbone.
-
----
-
-### ISU-06: ReduceLROnPlateau Bisa Memicu Terlalu Awal
-
-**Lokasi:** `model/legacy_or_wrappers/training_common.py`, baris 767–773
-
-```python
-tf.keras.callbacks.ReduceLROnPlateau(
-    monitor="val_loss",
-    factor=0.3,                                          # LR turun 70%
-    patience=max(1, args.early_stopping_patience // 2),  # default: 2 epoch
-    verbose=1,
-),
-```
-
-**Dampak:**
-- Dengan patience=2 dan total epoch=8, LR sudah bisa turun di epoch ke-3.
-- Setelah LR turun, model konvergen lebih lambat — ini bisa menyebabkan EarlyStopping trigger lebih cepat karena improvement menjadi sangat kecil.
-- Efek berantai: `ReduceLROnPlateau` → LR kecil → improvement kecil → `EarlyStopping` trigger.
-
----
-
-### ISU-07: Transformer Selalu Dilatih dari Nol — Transfer Learning Tidak Berlaku (KRITIS)
-
-**Lokasi:** `model/legacy_or_wrappers/transformer_backbones.py` (builder) + `model/legacy_or_wrappers/training_common.py:336-356` (build_model)
-
-```python
-# build_model di training_common.py (untuk SEMUA model TF)
-weights = "imagenet" if use_pretrained else None
-base_model = backbone_builder(include_top=False, weights=weights, input_shape=input_shape)
-base_model.trainable = False   # Stage 1: backbone DIBEKUKAN
-
-# Tetapi build_vit_backbone() di transformer_backbones.py:
-def build_vit_backbone(include_top=False, weights=None, input_shape=None):
-    input_shape = _validate_builder_args(include_top, weights, input_shape, "ViT")
-    # ... argumen `weights` TIDAK PERNAH DIPAKAI di sini ...
-    # arsitektur dibangun 100% dari nol dengan random init
-```
-
-**Dampak (sangat serius untuk ViT, SwinTransformer, DeiT):**
-- Builder transformer custom **mengabaikan** `weights="imagenet"`. Tidak ada bobot pretrained yang dimuat — backbone selalu random init.
-- Pada **Stage 1**, `base_model.trainable = False` membekukan backbone. Untuk transformer, ini berarti backbone menghasilkan **fitur acak yang dibekukan**, dan hanya head klasifikasi (GAP + Dropout + Dense) yang dilatih di atas fitur acak tersebut → praktis tidak belajar apa pun yang berguna.
-- Pada **Stage 2** (fine-tuning), backbone baru di-unfreeze, tetapi dengan `fine_tune_learning_rate=1e-5` selama hanya 2 epoch → bobot transformer hampir tidak bergerak.
-- Konsekuensi: **method `baseline`, `transfer_learning`, `transfer_learning_mixed_precision`, dan `full_fine_tuning` menghasilkan hasil yang nyaris sama untuk transformer**, karena semuanya efektif training-from-scratch dalam jumlah epoch yang sangat kecil.
-- Transformer terkenal "data-hungry": tanpa pretrained, ViT/Swin/DeiT membutuhkan dataset sangat besar atau epoch sangat banyak (puluhan hingga ratusan) plus augmentasi/regularisasi kuat. Pada dataset Parkinson yang kecil, transformer dari nol kemungkinan besar **underfit berat** dan kalah jauh dari CNN pretrained.
-
-**Catatan:** ini bukan bug sintaksis — kode tetap berjalan — tetapi secara metodologis hasil transformer pada konfigurasi saat ini tidak dapat dipakai untuk perbandingan yang adil terhadap CNN pretrained.
-
----
-
-### ISU-08: Tidak Ada Penanganan Class Imbalance di Loss Function
-
-**Lokasi:** `model/legacy_or_wrappers/training_common.py:379-393` (build_loss_and_metrics) + `model.fit(...)` baris 777-783 dan 801-807
-
-```python
-# Loss standar tanpa bobot kelas
-tf.keras.losses.BinaryCrossentropy()
-tf.keras.losses.SparseCategoricalCrossentropy()
-
-# model.fit() dipanggil TANPA argumen class_weight
-model.fit(train_ds, validation_data=val_ds, epochs=..., callbacks=...)
-```
-
-**Dampak:**
-- Splitter sudah melakukan balancing kelas minoritas pada level data, namun jika masih ada sisa ketidakseimbangan (umum pada dataset medis), loss tidak mengompensasinya.
-- Untuk diagnosis Parkinson, false negative (penderita terklasifikasi sehat) jauh lebih berisiko. Tanpa `class_weight` atau loss yang sensitif kelas, model cenderung bias ke kelas mayoritas.
-
----
-
-### ISU-09: Output Layer Tidak Dipaksa float32 saat Mixed Precision Aktif
-
-**Lokasi:** `model/legacy_or_wrappers/training_common.py:364-367`
-
-```python
-if num_classes == 2:
-    outputs = tf.keras.layers.Dense(1, activation="sigmoid", name="prediction")(x)
-else:
-    outputs = tf.keras.layers.Dense(num_classes, activation="softmax", name="prediction")(x)
-```
-
-**Dampak:**
-- Saat `mixed_precision` aktif (method `transfer_learning_mixed_precision` dan `full_fine_tuning`), global policy menjadi `mixed_float16`, sehingga layer output menghasilkan `float16`.
-- Praktik resmi Keras menganjurkan layer aktivasi terakhir di-set `dtype="float32"` untuk stabilitas numerik (terutama softmax/sigmoid + loss). Tanpa ini, ada risiko `NaN`/instabilitas pada sebagian kombinasi hardware.
-- Rekomendasi: `Dense(..., dtype="float32", name="prediction")`.
-
----
-
-## 4. Apakah Cara Training Sudah Benar?
-
-**Jawaban: Secara struktur sudah benar, tetapi parameter default kurang optimal untuk medical imaging.**
-
-Yang sudah benar:
-- Arsitektur pipeline modular dan bersih.
-- Early stopping ada di semua framework.
-- ModelCheckpoint untuk menyimpan best model ada.
-- CPU/GPU fallback ditangani dengan baik.
-- Mixed precision tersedia.
-- Augmentasi on-the-fly tersedia.
-- Seed global di-set untuk reproducibility.
-- Data split 80:10:10 dengan balancing kelas.
-
-Yang perlu diperbaiki (parameter, bukan struktur):
-- Default epoch terlalu kecil.
-- Patience terlalu kecil.
-- Inkonsistensi monitoring metric.
-- Callback tidak direset antar stage.
-- Fine-tune LR terlalu kecil untuk sesi yang sangat pendek.
-
-Yang perlu diperbaiki (metodologi — lebih serius dari sekadar parameter):
-- **Transformer dilatih dari nol** sehingga method transfer learning tidak berdampak untuk family transformer (ISU-07). Ini menjadikan hasil transformer tidak sebanding dengan CNN pretrained.
-- Tidak ada penanganan imbalance di loss (ISU-08).
-- Output layer tidak `float32` saat mixed precision (ISU-09).
-
----
-
-## 5. Rekomendasi Terperinci
-
-### REC-01: Naikkan Default Epoch
-
-**File:** `configs/default_training.yaml`
-
-| Parameter | Nilai Saat Ini | Rekomendasi | Alasan |
-|---|---|---|---|
-| `epochs` | 8 | 25–30 | Medical imaging butuh lebih banyak iterasi |
-| `fine_tune_epochs` | 2 | 8–10 | LR rendah butuh lebih banyak epoch |
-
-Khusus untuk method `full_fine_tuning` di `configs/training_methods.yaml`:
-
-| Parameter | Nilai Saat Ini | Rekomendasi |
-|---|---|---|
-| `fine_tune_epochs` | 6 | 15 |
-
----
-
-### REC-02: Naikkan Early Stopping Patience
-
-**File:** `configs/default_training.yaml`
-
-| Parameter | Nilai Saat Ini | Rekomendasi | Alasan |
-|---|---|---|---|
-| `early_stopping_patience` | 4 | 8–10 | Rasio patience/epoch sebaiknya ≤25% |
-
-Dengan epoch=25 dan patience=8, rasio menjadi 32% — masih lebih baik dari 50% saat ini.
-
-Alternatif: setel patience secara proporsional. Contoh: patience = `epochs // 4`.
-
----
-
-### REC-03: Selaraskan Monitoring Metric
-
-**File:** `model/legacy_or_wrappers/training_common.py`
-
-Pilih salah satu strategi dan terapkan konsisten:
-
-**Opsi A — Monitor val_accuracy (direkomendasikan untuk klasifikasi)**
-```python
-# ModelCheckpoint
-monitor="val_accuracy", mode="max"
-
-# EarlyStopping
-monitor="val_accuracy", mode="max"
-
-# ReduceLROnPlateau
-monitor="val_accuracy", mode="max"
-```
-
-**Opsi B — Monitor val_loss**
-```python
-# Semua callback
-monitor="val_loss", mode="min"
-```
-
-Untuk tugas klasifikasi medis, **val_accuracy** lebih mudah diinterpretasikan dan langsung relevan dengan tujuan.
-
----
-
-### REC-04: Reset Callback State antara Stage 1 dan Stage 2
-
-**File:** `model/legacy_or_wrappers/training_common.py`
-
-Buat objek callback baru untuk setiap stage, bukan menggunakan objek yang sama:
-
-```python
-# Stage 1
-callbacks_stage1 = [
-    tf.keras.callbacks.ModelCheckpoint(...),
-    tf.keras.callbacks.EarlyStopping(...),
-    tf.keras.callbacks.ReduceLROnPlateau(...),
-]
-model.fit(..., callbacks=callbacks_stage1, epochs=args.epochs)
-
-# Stage 2 — objek BARU, state bersih
-callbacks_stage2 = [
-    tf.keras.callbacks.ModelCheckpoint(
-        filepath=str(best_model_path),   # tetap timpa best_model.keras
-        monitor="val_accuracy",
-        mode="max",
-        save_best_only=True,
-        verbose=1,
-    ),
-    tf.keras.callbacks.EarlyStopping(
-        monitor="val_accuracy",
-        patience=args.early_stopping_patience,
-        restore_best_weights=True,
-        verbose=1,
-    ),
-    tf.keras.callbacks.ReduceLROnPlateau(
-        monitor="val_accuracy",
-        factor=0.5,
-        patience=max(1, args.early_stopping_patience // 2),
-        verbose=1,
-    ),
-]
-model.fit(..., callbacks=callbacks_stage2, epochs=args.fine_tune_epochs)
-```
-
----
-
-### REC-05: Sesuaikan Learning Rate Fine-Tuning
-
-**File:** `configs/default_training.yaml`
-
-| Parameter | Nilai Saat Ini | Rekomendasi | Catatan |
-|---|---|---|---|
-| `fine_tune_learning_rate` | 1e-5 | 5e-5 hingga 1e-4 | Lebih terasa dampaknya dalam 8–10 epoch |
-
-Panduan umum per backbone:
-
-| Model | Rekomendasi LR Fine-Tune |
-|---|---|
-| MobileNetV2, EfficientNet (ringan) | 1e-4 |
-| ResNet50, VGG16, VGG19, InceptionV3 | 5e-5 |
-| ResNet152, DenseNet121 (besar) | 3e-5 |
-| ResNeXt50 (random init — fine-tune tidak berlaku) | — *|
-| ViT, SwinTransformer, DeiT | 1e-5 hingga 3e-5 |
-
-*ResNeXt50 dilatih dari nol (tidak ada pretrained), sehingga pembagian Stage 1/Stage 2 tidak relevan. Pertimbangkan LR lebih besar (1e-3 s/d 1e-4) untuk konvergensi lebih cepat dari random init.
-
----
-
-### REC-06: Pertimbangkan Cosine Annealing sebagai Alternatif ReduceLROnPlateau
-
-`ReduceLROnPlateau` bersifat reaktif (LR turun ketika ada plateau), sedangkan `CosineAnnealingRestarts` bersifat proaktif dan lebih stabil untuk fine-tuning.
-
-```python
-# Alternatif scheduler yang lebih smooth
-tf.keras.callbacks.LearningRateScheduler(
-    lambda epoch, lr: lr * 0.5 ** (epoch // 5)   # halving setiap 5 epoch
-)
-```
-
-Atau gunakan `tf.keras.optimizers.schedules.CosineDecay` langsung di optimizer.
-
----
-
-### REC-07: Tambahkan Logging Epoch Aktual yang Dipakai
-
-Setelah EarlyStopping, jumlah epoch aktual bisa berbeda dari yang dikonfigurasi. Pastikan `epochs_trained` yang disimpan di report menggunakan panjang history, bukan nilai `args.epochs`:
-
-```python
-# Sudah benar di kode saat ini:
-"epochs_trained": int(len(history_df)),
-```
-
-Ini sudah diimplementasikan dengan benar — konfirmasi tidak perlu diubah.
-
----
-
-### REC-08: Konfigurasi YOLO yang Lebih Eksplisit
-
-**File:** `model/legacy_or_wrappers/yolov8.py`
-
-Untuk YOLO, tambahkan parameter tambahan yang dapat meningkatkan hasil:
-
-```python
-model.train(
-    ...
-    # Parameter yang sudah ada
-    patience=args.early_stopping_patience,
-    lr0=args.learning_rate,
-
-    # Parameter yang bisa ditambahkan
-    lrf=0.01,        # learning rate final = lr0 * lrf (cosine decay bawaan YOLO)
-    warmup_epochs=3, # warmup epoch agar LR naik bertahap di awal
-    cos_lr=True,     # aktifkan cosine LR schedule
-    label_smoothing=0.1,  # regularisasi untuk klasifikasi medis
-)
-```
-
----
-
-### REC-09: Perbaiki Strategi Transformer (Prioritas Tinggi)
-
-**File:** `model/legacy_or_wrappers/transformer_backbones.py` + `configs/training_methods.yaml`
-
-Karena transformer custom selalu dari nol (ISU-07), pilih salah satu strategi berikut:
-
-**Opsi A — Gunakan transformer pretrained (paling direkomendasikan).**
-Ganti builder custom dengan implementasi pretrained, misalnya melalui library `keras-cv`, `transformers` (HuggingFace), atau `tfimm`. Dengan bobot ImageNet/Imagenet-21k, transformer bisa benar-benar memanfaatkan transfer learning seperti CNN.
-
-**Opsi B — Jika tetap dari nol, sesuaikan resep training khusus transformer.**
-- **Jangan bekukan backbone** pada Stage 1 (set `base_model.trainable = True` sejak awal) — membekukan backbone acak membuat Stage 1 sia-sia.
-- Naikkan epoch jauh lebih banyak (50–150) dengan augmentasi kuat (RandAugment, Mixup/CutMix) dan regularisasi (weight decay, stochastic depth).
-- Gunakan optimizer AdamW + warmup + cosine decay, LR awal ~1e-3 hingga 3e-4.
-- Sadari batasannya: pada dataset medis kecil, transformer dari nol kemungkinan tetap kalah dari CNN pretrained. Dokumentasikan ini agar perbandingan eksperimen jujur.
-
-**Opsi C — Nonaktifkan sementara family transformer** (`enabled: false` di `configs/models.yaml`) sampai strategi pretrained siap, agar tidak menghasilkan baris eksperimen yang menyesatkan.
-
----
-
-### REC-10: Tambahkan Penanganan Class Imbalance
-
-**File:** `model/legacy_or_wrappers/training_common.py`
-
-Hitung `class_weight` dari distribusi train dan teruskan ke `model.fit`:
-
-```python
-from sklearn.utils.class_weight import compute_class_weight
-import numpy as np
-
-weights = compute_class_weight(
-    class_weight="balanced",
-    classes=np.arange(num_classes),
-    y=np.array(train_labels),
-)
-class_weight = {i: float(w) for i, w in enumerate(weights)}
-
-model.fit(..., class_weight=class_weight)
-```
-
-Catatan: untuk loss binary dengan label float, `class_weight` Keras tetap berlaku. Alternatif lain: focal loss untuk kasus imbalance berat.
-
----
-
-### REC-11: Set Output Layer ke float32 saat Mixed Precision
-
-**File:** `model/legacy_or_wrappers/training_common.py:364-367`
-
-```python
-if num_classes == 2:
-    outputs = tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32", name="prediction")(x)
-else:
-    outputs = tf.keras.layers.Dense(num_classes, activation="softmax", dtype="float32", name="prediction")(x)
-```
-
-Aman diterapkan baik saat mixed precision aktif maupun tidak (pada float32 biasa, `dtype="float32"` tidak berdampak negatif).
-
----
-
-## 6. Konfigurasi Rekomendasi Lengkap
-
-Berikut rekomendasi nilai untuk `configs/default_training.yaml`:
-
-```yaml
-default_training:
-  image_size: 224
-  batch_size: 16
-  epochs: 25                     # naik dari 8 → 25
-  fine_tune_epochs: 10           # naik dari 2 → 10
-  fine_tune_freeze_ratio: 0.7
-  learning_rate: 0.001
-  fine_tune_learning_rate: 0.00005   # naik dari 1e-5 → 5e-5
-  dropout: 0.35
-  early_stopping_patience: 8    # naik dari 4 → 8
-  seed: 42
-  ...
-```
-
-Rekomendasi untuk `configs/training_methods.yaml`:
-
-```yaml
-methods:
-  baseline:
-    arg_overrides:
-      no_pretrained: true
-      fine_tune_epochs: 0
-      epochs: 30               # dari scratch butuh lebih banyak epoch
-      early_stopping_patience: 10
-
-  transfer_learning:
-    arg_overrides:
-      no_pretrained: false
-      fine_tune_epochs: 10
-      epochs: 25
-      early_stopping_patience: 8
-
-  transfer_learning_mixed_precision:
-    arg_overrides:
-      no_pretrained: false
-      fine_tune_epochs: 10
-      epochs: 25
-      early_stopping_patience: 8
-      mixed_precision: true
-
-  full_fine_tuning:
-    arg_overrides:
-      no_pretrained: false
-      fine_tune_epochs: 15
-      epochs: 25
-      early_stopping_patience: 10
-      mixed_precision: true
-```
-
----
-
-## 7. Prioritas Implementasi
-
-Urutkan berdasarkan dampak vs effort:
-
-| Prioritas | Isu | Effort | Dampak |
-|---|---|---|---|
-| 1 | **Perbaiki strategi transformer (REC-09)** | Tinggi — ganti backbone / resep | **Sangat Tinggi** (untuk family transformer) |
-| 2 | Naikkan epoch (REC-01) | Rendah — edit YAML | Tinggi |
-| 3 | Naikkan patience (REC-02) | Rendah — edit YAML | Tinggi |
-| 4 | Selaraskan monitoring metric (REC-03) | Sedang — edit training_common.py | Sedang |
-| 5 | Reset callback antar stage (REC-04) | Sedang — edit training_common.py | Sedang |
-| 6 | Sesuaikan LR fine-tuning (REC-05) | Rendah — edit YAML | Sedang |
-| 7 | Class weight imbalance (REC-10) | Sedang — edit training_common.py | Sedang (klinis penting) |
-| 8 | Output float32 mixed precision (REC-11) | Rendah — 2 baris | Rendah-Sedang (stabilitas) |
-| 9 | YOLO tambahan parameter (REC-08) | Sedang — edit yolov8.py | Rendah-Sedang |
-| 10 | Cosine LR scheduler (REC-06) | Tinggi — refactor | Rendah |
-
-**Rekomendasi minimal yang paling efektif (tanpa sentuh kode):** Lakukan Prioritas 2 dan 3 (edit YAML — epoch & patience) untuk perbaikan cepat semua model.
-
-**Rekomendasi paling berdampak (perlu ubah kode):** REC-09 — selama belum diperbaiki, hasil family transformer sebaiknya **tidak** dijadikan acuan perbandingan terhadap CNN.
-
----
-
-## 8. Catatan Khusus untuk Medical Imaging (Parkinson)
-
-Dataset Parkinson (spiral drawing) memiliki karakteristik khusus:
-
-1. **Jumlah data sedikit** — dataset medis umumnya kecil (ratusan hingga ribuan gambar). Ini membuat setiap epoch lebih "berharga" dan model butuh lebih banyak epoch untuk konvergen.
-
-2. **Kelas imbalanced** — penyakit vs sehat sering tidak seimbang. Sudah ditangani dengan balancing di splitter, namun perlu dipastikan data augmentasi juga membantu kelas minoritas.
-
-3. **Feature yang subtle** — spiral tremor adalah perbedaan halus yang tidak terlihat di ImageNet. Transfer learning membutuhkan fine-tuning yang lebih dalam dan lebih lama dibanding domain lain.
-
-4. **Validasi metric yang relevan** — untuk diagnosis medis, F1-score dan ROC-AUC lebih penting dari accuracy (terutama jika kelas imbalanced). Pertimbangkan menggunakan `monitor="val_f1"` dengan custom metric jika memungkinkan.
-
-5. **Reproducibility** — seed sudah di-set dengan baik di semua framework. Ini penting untuk perbandingan eksperimen yang adil.
-
----
-
-## 9. Kesimpulan
-
-Early stopping **sudah diimplementasikan** di project ini, baik untuk TensorFlow (CNN + Transformer) maupun YOLO. Cara training yang dilakukan sudah mengikuti alur yang benar: split → augmentasi → training dengan callback → evaluasi → simpan artifact.
-
-Namun ada **9 isu teknis** (ISU-01 s/d ISU-09) yang perlu diperhatikan, dengan **3 isu utama yang paling berdampak:**
-
-1. **Transformer dilatih dari nol (ISU-07)** — builder ViT/Swin/DeiT mengabaikan bobot ImageNet, dan backbone dibekukan saat random init pada Stage 1. Akibatnya transfer learning tidak berlaku dan hasil family transformer tidak sebanding dengan CNN pretrained. **Ini temuan paling serius.**
-2. **Parameter default terlalu kecil** (epoch=8, patience=4) — menyebabkan model tidak konvergen optimal.
-3. **Inkonsistensi metric monitoring + state callback tidak direset** — menyebabkan perilaku training yang tidak deterministik antar stage.
-
-Perbaikan termudah (tanpa sentuh kode): **edit `configs/default_training.yaml` dan `configs/training_methods.yaml`** untuk menaikkan `epochs` dan `early_stopping_patience`.
-
-Perbaikan paling penting (perlu ubah kode): tangani strategi transformer (REC-09). Sampai itu dilakukan, perlakukan hasil family transformer sebagai "training-from-scratch", bukan transfer learning.
+Tindakan paling berdampak & termurah yang bisa dilakukan **sekarang**: hapus pemanggilan ganda `preprocess_fn` di [predictor.py:35-37](src/inference/predictor.py#L35-L37) (BLOCKER-01). Itu satu perubahan kecil yang langsung memulihkan kebenaran prediksi aplikasi yang akan Anda deploy.

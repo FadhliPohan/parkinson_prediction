@@ -12,6 +12,11 @@ def preprocess_transformer_input(inputs: np.ndarray) -> np.ndarray:
     return (inputs.astype(np.float32) / 127.5) - 1.0
 
 
+# CATATAN: peta ini TIDAK lagi dipakai untuk preprocessing di inference.
+# Layer preprocessing sudah tertanam di dalam model TF saat training, jadi
+# inference hanya boleh memberi piksel mentah [0,255] (lihat prepare_tf_input).
+# Peta dipertahankan sebagai dokumentasi pemetaan preprocessing per-model.
+# JANGAN menerapkannya lagi pada input inference (akan terjadi double preprocessing).
 MODEL_PREPROCESSORS = {
     "mobilenetv2": tf.keras.applications.mobilenet_v2.preprocess_input,
     "resnet50": tf.keras.applications.resnet50.preprocess_input,
@@ -27,15 +32,19 @@ MODEL_PREPROCESSORS = {
 
 
 def prepare_tf_input(image_bytes: bytes, target_size: Tuple[int, int], preprocess_key: str) -> np.ndarray:
+    # PENTING (BLOCKER-01): model TF disimpan dengan layer preprocessing sebagai
+    # bagian dari graph-nya (lihat training_common.py: `x = preprocess_fn(inputs)`),
+    # sehingga model sudah melakukan normalisasi sendiri di dalam.
+    # Karena itu inference WAJIB memberi piksel mentah RGB [0,255] dan TIDAK boleh
+    # menerapkan preprocessing lagi di sini. Menerapkannya ulang membuat normalisasi
+    # terjadi dua kali (mis. ViT: x/127.5-1 dilakukan 2x) dan merusak prediksi.
+    # `preprocess_key` sengaja dipertahankan di signature untuk kompatibilitas API
+    # dan tidak dipakai untuk preprocessing apa pun. Lihat MODEL_PREPROCESSORS di atas
+    # yang hanya berfungsi sebagai dokumentasi pemetaan preprocessing per-model.
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     image = image.resize(target_size)
     array = np.asarray(image, dtype=np.float32)
-    batch = np.expand_dims(array, axis=0)
-
-    preprocess_fn = MODEL_PREPROCESSORS.get(preprocess_key)
-    if preprocess_fn is not None:
-        batch = preprocess_fn(batch)
-    return batch
+    return np.expand_dims(array, axis=0)
 
 
 def prepare_yolo_input(image_bytes: bytes) -> np.ndarray:
