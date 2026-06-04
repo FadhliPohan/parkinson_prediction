@@ -192,40 +192,76 @@ def _save_sample(sample: SplitSample, target_path: Path, resize_to: Optional[Tup
         image.save(str(target_path), **save_kwargs)
 
 
-def _build_balanced_samples(
+def _split_real_per_class(
     class_entries: Sequence[ClassEntry],
     extensions: Sequence[str],
+    train_ratio: float,
+    test_ratio: float,
+    validation_ratio: float,
     rng: random.Random,
-) -> Tuple[Dict[str, List[SplitSample]], Dict[str, object]]:
-    source_files_per_class: Dict[str, List[Path]] = {}
+) -> Tuple[Dict[str, List[Path]], Dict[str, List[Path]], Dict[str, List[Path]], Dict[str, int]]:
+    """Split gambar ASLI tiap kelas ke train/test/validation (stratified, tanpa augmentasi).
+
+    BLOCKER-02: split dilakukan SEBELUM augmentasi/balancing apa pun. Dengan begitu
+    test & validation hanya berisi gambar asli, dan tidak ada gambar (atau rotasinya)
+    yang muncul di lebih dari satu split. Balancing dilakukan terpisah pada train saja
+    via :func:`_balance_train_per_class`.
+    """
+    train_real: Dict[str, List[Path]] = {}
+    test_real: Dict[str, List[Path]] = {}
+    validation_real: Dict[str, List[Path]] = {}
     before_counts: Dict[str, int] = {}
+
     for entry in class_entries:
         files = list_image_files(entry.source_dir, extensions)
-        source_files_per_class[entry.class_name] = files
         before_counts[entry.class_name] = len(files)
+
+        shuffled = files[:]
+        rng.shuffle(shuffled)
+        train_count, test_count, validation_count = _compute_split_counts(
+            total_count=len(shuffled),
+            train_ratio=train_ratio,
+            test_ratio=test_ratio,
+            validation_ratio=validation_ratio,
+        )
+        train_real[entry.class_name] = shuffled[:train_count]
+        test_real[entry.class_name] = shuffled[train_count : train_count + test_count]
+        validation_real[entry.class_name] = shuffled[
+            train_count + test_count : train_count + test_count + validation_count
+        ]
 
     if not before_counts:
         raise ValueError("Tidak ada kelas valid untuk proses split.")
 
-    unique_counts = sorted(set(before_counts.values()))
-    is_balanced = len(unique_counts) == 1
-    target_per_class = max(before_counts.values())
+    return train_real, test_real, validation_real, before_counts
 
-    samples_per_class: Dict[str, List[SplitSample]] = {}
+
+def _balance_train_per_class(
+    train_real: Dict[str, List[Path]],
+    rng: random.Random,
+) -> Tuple[Dict[str, List[SplitSample]], int, Dict[str, int], Dict[str, int], Dict[str, int]]:
+    """Seimbangkan HANYA train: tambah rotasi gambar train kelas minoritas ke jumlah mayoritas.
+
+    BLOCKER-02: sumber rotasi (`rng.choice(files)`) diambil EKSKLUSIF dari gambar train
+    kelas yang sama, sehingga gambar sintetis tidak pernah berbagi sumber dengan test/validation.
+    Mengembalikan: train_samples per kelas, target_per_class (train), generated_per_class,
+    after_train_counts, before_train_counts.
+    """
+    before_train_counts = {class_name: len(files) for class_name, files in train_real.items()}
+    target_per_class = max(before_train_counts.values()) if before_train_counts else 0
+
+    train_samples: Dict[str, List[SplitSample]] = {}
     generated_per_class: Dict[str, int] = {}
 
-    for entry in class_entries:
-        class_name = entry.class_name
-        files = source_files_per_class[class_name]
+    for class_name, files in train_real.items():
         base_samples = [SplitSample(source_path=path) for path in files]
-
-        missing_count = target_per_class - len(base_samples)
-        generated_per_class[class_name] = max(0, missing_count)
+        missing_count = max(0, target_per_class - len(files))
+        generated_per_class[class_name] = missing_count
 
         synthetic_samples: List[SplitSample] = []
-        if missing_count > 0:
+        if missing_count > 0 and files:
             for _ in range(missing_count):
-                source_path = rng.choice(files)
+                source_path = rng.choice(files)  # hanya dari gambar TRAIN kelas ini
                 angle = rng.uniform(ROTATION_MIN_DEGREES, ROTATION_MAX_DEGREES)
                 synthetic_samples.append(
                     SplitSample(
@@ -235,22 +271,10 @@ def _build_balanced_samples(
                     )
                 )
 
-        samples_per_class[class_name] = base_samples + synthetic_samples
+        train_samples[class_name] = base_samples + synthetic_samples
 
-    after_counts = {class_name: len(samples) for class_name, samples in samples_per_class.items()}
-
-    balancing_manifest = {
-        "applied": not is_balanced,
-        "strategy": "minority_rotation_to_majority_before_split",
-        "rotation_range_degrees": [ROTATION_MIN_DEGREES, ROTATION_MAX_DEGREES],
-        "class_count": len(before_counts),
-        "target_per_class": target_per_class,
-        "before_counts": before_counts,
-        "after_counts": after_counts,
-        "generated_per_class": generated_per_class,
-        "total_generated": int(sum(generated_per_class.values())),
-    }
-    return samples_per_class, balancing_manifest
+    after_train_counts = {class_name: len(samples) for class_name, samples in train_samples.items()}
+    return train_samples, target_per_class, generated_per_class, after_train_counts, before_train_counts
 
 
 def _compute_split_counts(
@@ -287,18 +311,36 @@ def _is_uniform_count_map(count_map: Dict[str, object]) -> bool:
     return len(set(values)) == 1
 
 
-def validate_balanced_split_manifest(manifest: Dict[str, object]) -> Dict[str, object]:
-    balancing = manifest.get("class_balancing", {})
-    split_stats = manifest.get("split_stats", {})
+def _sum_count_map(count_map: object) -> int:
+    if not isinstance(count_map, dict):
+        return 0
+    total = 0
+    for value in count_map.values():
+        try:
+            total += int(value)
+        except (TypeError, ValueError):
+            continue
+    return total
 
-    if not isinstance(balancing, dict):
-        balancing = {}
+
+def validate_balanced_split_manifest(manifest: Dict[str, object]) -> Dict[str, object]:
+    """Validasi split dengan kebijakan anti-leakage (BLOCKER-02).
+
+    Invariant yang divalidasi:
+      - ``train_balanced``: jumlah train per kelas seragam (hasil balancing train-only).
+      - ``testing_equals_validation``: jumlah test == validation per kelas (rasio simetris).
+      - ``no_synthetic_in_testing`` / ``no_synthetic_in_validation``: test & validation
+        TIDAK boleh mengandung gambar sintetis (guard kebocoran data).
+
+    ``is_balanced`` (dipertahankan untuk kompatibilitas konsumen) = True hanya jika
+    train seimbang, test==val, DAN tidak ada sintetis di test/validation.
+    """
+    split_stats = manifest.get("split_stats", {})
+    generated_stats = manifest.get("split_generated_stats", {})
     if not isinstance(split_stats, dict):
         split_stats = {}
-
-    after_counts = balancing.get("after_counts", {})
-    if not isinstance(after_counts, dict):
-        after_counts = {}
+    if not isinstance(generated_stats, dict):
+        generated_stats = {}
 
     train_map = split_stats.get("train", {})
     test_map = split_stats.get("testing", {})
@@ -311,20 +353,21 @@ def validate_balanced_split_manifest(manifest: Dict[str, object]) -> Dict[str, o
         validation_map = {}
 
     testing_equals_validation = bool(test_map and validation_map and test_map == validation_map)
+    no_synthetic_in_testing = _sum_count_map(generated_stats.get("testing", {})) == 0
+    no_synthetic_in_validation = _sum_count_map(generated_stats.get("validation", {})) == 0
+    no_leakage_in_eval = no_synthetic_in_testing and no_synthetic_in_validation
 
     validation_result = {
-        "after_counts_balanced": _is_uniform_count_map(after_counts),
         "train_balanced": _is_uniform_count_map(train_map),
-        "testing_balanced": _is_uniform_count_map(test_map),
-        "validation_balanced": _is_uniform_count_map(validation_map),
         "testing_equals_validation": testing_equals_validation,
+        "no_synthetic_in_testing": no_synthetic_in_testing,
+        "no_synthetic_in_validation": no_synthetic_in_validation,
+        "no_leakage_in_eval": no_leakage_in_eval,
     }
     validation_result["is_balanced"] = bool(
-        validation_result["after_counts_balanced"]
-        and validation_result["train_balanced"]
-        and validation_result["testing_balanced"]
-        and validation_result["validation_balanced"]
+        validation_result["train_balanced"]
         and validation_result["testing_equals_validation"]
+        and validation_result["no_leakage_in_eval"]
     )
     return validation_result
 
@@ -373,39 +416,62 @@ def split_dataset(
         "validation": {},
     }
     class_manifest: List[Dict[str, object]] = []
-    class_samples, balancing_manifest = _build_balanced_samples(
+
+    # BLOCKER-02: split gambar ASLI dulu (stratified), lalu balancing HANYA pada train.
+    # Test & validation selalu 100% gambar asli → tidak ada kebocoran sintetis, dan
+    # rotasi train tidak pernah berbagi sumber dengan test/validation.
+    train_real, test_real, validation_real, before_counts = _split_real_per_class(
         class_entries=class_entries,
         extensions=extensions,
+        train_ratio=train_ratio,
+        test_ratio=test_ratio,
+        validation_ratio=validation_ratio,
         rng=rng,
     )
+    (
+        train_samples_per_class,
+        target_train,
+        generated_per_class,
+        after_train_counts,
+        before_train_counts,
+    ) = _balance_train_per_class(train_real=train_real, rng=rng)
+
+    source_is_balanced = len(set(before_counts.values())) <= 1
+    balancing_manifest = {
+        "applied": not source_is_balanced,
+        "scope": "train_only",
+        "strategy": "minority_rotation_to_majority_train_only",
+        "rotation_range_degrees": [ROTATION_MIN_DEGREES, ROTATION_MAX_DEGREES],
+        "class_count": len(before_counts),
+        "target_per_class": target_train,
+        "before_counts": before_counts,
+        "before_train_counts": before_train_counts,
+        "after_train_counts": after_train_counts,
+        "generated_per_class": generated_per_class,
+        "total_generated": int(sum(generated_per_class.values())),
+    }
 
     for entry in class_entries:
-        samples = class_samples[entry.class_name]
-        shuffled = samples[:]
-        rng.shuffle(shuffled)
+        class_name = entry.class_name
+        train_samples = train_samples_per_class[class_name]
+        test_samples = [SplitSample(source_path=path) for path in test_real[class_name]]
+        validation_samples = [SplitSample(source_path=path) for path in validation_real[class_name]]
 
-        train_count, test_count, validation_count = _compute_split_counts(
-            total_count=len(shuffled),
-            train_ratio=train_ratio,
-            test_ratio=test_ratio,
-            validation_ratio=validation_ratio,
-        )
-        train_samples = shuffled[:train_count]
-        test_samples = shuffled[train_count : train_count + test_count]
-        validation_samples = shuffled[train_count + test_count : train_count + test_count + validation_count]
+        # Acak urutan train agar sampel sintetis tidak menumpuk di akhir.
+        rng.shuffle(train_samples)
 
         augmented_train_count = sum(1 for sample in train_samples if sample.is_augmented)
-        augmented_test_count = sum(1 for sample in test_samples if sample.is_augmented)
-        augmented_validation_count = sum(1 for sample in validation_samples if sample.is_augmented)
+        augmented_test_count = 0  # test selalu gambar asli (BLOCKER-02)
+        augmented_validation_count = 0  # validation selalu gambar asli (BLOCKER-02)
 
         class_manifest.append(
             {
-                "class_name": entry.class_name,
+                "class_name": class_name,
                 "source_dir": str(entry.source_dir),
                 "relative_path": entry.relative_path,
                 "source_images": entry.image_count,
-                "generated_images": int(balancing_manifest["generated_per_class"].get(entry.class_name, 0)),
-                "total_images": len(shuffled),
+                "generated_images": int(generated_per_class.get(class_name, 0)),
+                "total_images": len(train_samples) + len(test_samples) + len(validation_samples),
                 "split_counts": {
                     "train": len(train_samples),
                     "testing": len(test_samples),
@@ -419,33 +485,33 @@ def split_dataset(
             }
         )
 
-        split_stats["train"][entry.class_name] = len(train_samples)
-        split_stats["testing"][entry.class_name] = len(test_samples)
-        split_stats["validation"][entry.class_name] = len(validation_samples)
-        split_augmented_stats["train"][entry.class_name] = augmented_train_count
-        split_augmented_stats["testing"][entry.class_name] = augmented_test_count
-        split_augmented_stats["validation"][entry.class_name] = augmented_validation_count
+        split_stats["train"][class_name] = len(train_samples)
+        split_stats["testing"][class_name] = len(test_samples)
+        split_stats["validation"][class_name] = len(validation_samples)
+        split_augmented_stats["train"][class_name] = augmented_train_count
+        split_augmented_stats["testing"][class_name] = augmented_test_count
+        split_augmented_stats["validation"][class_name] = augmented_validation_count
 
         for idx, sample in enumerate(train_samples):
             filename = _build_sample_filename(index=idx, sample=sample)
-            target = split_dir / "train" / entry.class_name / filename
+            target = split_dir / "train" / class_name / filename
             _save_sample(sample=sample, target_path=target, resize_to=train_resize)
 
         for idx, sample in enumerate(test_samples):
             filename = _build_sample_filename(index=idx, sample=sample)
-            target = split_dir / "testing" / entry.class_name / filename
+            target = split_dir / "testing" / class_name / filename
             _save_sample(sample=sample, target_path=target, resize_to=test_resize)
 
         for idx, sample in enumerate(validation_samples):
             filename = _build_sample_filename(index=idx, sample=sample)
-            target = split_dir / "validation" / entry.class_name / filename
+            target = split_dir / "validation" / class_name / filename
             _save_sample(sample=sample, target_path=target, resize_to=validation_resize)
 
     metadata_dir = split_dir / "_metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "schema_version": "1.2.0",
+        "schema_version": "1.3.0",
         "seed": int(seed),
         "original_dir": str(original_dir),
         "split_dir": str(split_dir),
@@ -469,7 +535,8 @@ def split_dataset(
     manifest["balance_validation"] = balance_validation
     if not balance_validation.get("is_balanced", False):
         raise RuntimeError(
-            "Hasil split tidak seimbang. "
+            "Hasil split tidak valid (train tidak seimbang, test≠validation, "
+            "atau ada gambar sintetis di test/validation). "
             "Periksa konfigurasi split/kelas pada dataset source sebelum training."
         )
 

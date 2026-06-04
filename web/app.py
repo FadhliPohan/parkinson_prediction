@@ -25,6 +25,7 @@ from src.inference.predictor import predict_from_bundle
 from src.models.registry import ModelRegistry
 from src.optimizer import OPTIMIZER_DESCRIPTIONS, list_optimizers
 from src.utils.runtime import build_runtime_env, get_runtime_python
+from src.utils.config import load_default_training_config
 from src.reporting.report_reader import (
     build_experiment_index,
     build_latest_summary_table,
@@ -1737,6 +1738,378 @@ def render_training_tab(
     st.caption("Lihat detail metrik & grafik pada tab 'Training Report'.")
 
 
+def _doc_pretrained_label(model_cfg: "ModelConfig") -> str:
+    """Tentukan status bobot awal sebuah model untuk tabel dokumentasi."""
+    family = str(model_cfg.family).strip().lower()
+    if family == "yolo":
+        return "Pretrained (ultralytics)"
+    if family == "transformer":
+        return "Acak / from-scratch ⚠️"
+    if family == "cnn":
+        if model_cfg.model_id == "resnext50":
+            return "Acak (implementasi kustom)"
+        return "Pretrained ImageNet"
+    return "—"
+
+
+def render_documentation_tab(
+    dataset_registry: DatasetRegistry,
+    model_registry: ModelRegistry,
+    augmentation_registry: TrainingAugmentationRegistry,
+    method_registry: TrainingMethodRegistry,
+) -> None:
+    st.subheader("Dokumentasi Project")
+    st.markdown(
+        "<div class='pp-note'>Halaman ini menjelaskan cara kerja aplikasi secara akademis dan teknis: "
+        "cara menjalankan, alur sistem end-to-end, proses split data, preprocessing, augmentasi, arsitektur "
+        "model, proses training, serta evaluasi. Konten daftar model/method/optimizer diambil langsung dari "
+        "konfigurasi aktif sehingga selalu sinkron dengan sistem.</div>",
+        unsafe_allow_html=True,
+    )
+
+    (
+        sec_run,
+        sec_flow,
+        sec_split,
+        sec_prep,
+        sec_aug,
+        sec_model,
+        sec_train,
+        sec_eval,
+        sec_notes,
+    ) = st.tabs(
+        [
+            "📖 Cara Menjalankan",
+            "🔄 Alur Sistem",
+            "🗂️ Dataset & Split",
+            "🎛️ Preprocessing",
+            "🌀 Augmentasi",
+            "🧠 Arsitektur Model",
+            "🏋️ Proses Training",
+            "📊 Evaluasi & Metrik",
+            "⚠️ Catatan & Batasan",
+        ]
+    )
+
+    # ------------------------------------------------------------------ #
+    with sec_run:
+        st.markdown("### Cara Menjalankan Aplikasi")
+        st.markdown(
+            "Aplikasi memiliki dua antarmuka: **dashboard web (Streamlit)** untuk visualisasi/training/prediksi, "
+            "dan **menu interaktif terminal** (`main.py`) untuk menjalankan pipeline langkah demi langkah."
+        )
+        st.markdown("**1. Menjalankan dashboard (cara utama)**")
+        st.code("run.bat\n# atau setara:\nstreamlit run web/app.py", language="bash")
+        st.markdown("**2. Menu interaktif terminal**")
+        st.code("python main.py", language="bash")
+        st.markdown(
+            "Menu menyediakan: cek dataset, split data, augmentasi, training satu/beberapa model, "
+            "hingga membuka dashboard. Setiap pilihan memanggil script di folder `training/`."
+        )
+        st.markdown("**3. Tahapan data manual (opsional)**")
+        st.code(
+            "python training/1.check_dataset.py     # validasi struktur & jumlah gambar per kelas\n"
+            "python training/2.split_data_testing.py # split train/test/validation + balancing train\n"
+            "python training/3.augmentasi.py         # inspeksi/preview augmentasi",
+            language="bash",
+        )
+        st.markdown("**4. Training langsung via CLI**")
+        st.code(
+            "python training/train.py --dataset <dataset_id> --models <model_id> "
+            "--method transfer_learning --split-first",
+            language="bash",
+        )
+        st.info(
+            "Training juga bisa dijalankan dari tab **Training** pada dashboard ini (tanpa mengetik perintah). "
+            "Hasil & metrik muncul di tab **Training Report**, dan prediksi gambar baru di tab **Prediksi**."
+        )
+
+    # ------------------------------------------------------------------ #
+    with sec_flow:
+        st.markdown("### Alur Sistem End-to-End")
+        st.markdown(
+            "Sistem dibangun berlapis: lapisan orkestrasi (`src/`) mengatur konfigurasi dan menjalankan "
+            "script worker per-model (`model/legacy_or_wrappers/`) sebagai subprocess. Pemisahan ini menjaga "
+            "tiap framework (TensorFlow / YOLO) berjalan di proses terisolasi."
+        )
+        st.code(
+            "TRAINING\n"
+            "run.bat / main.py (menu)\n"
+            "   └─> training/train.py            (ekspansi matriks dataset × augmentasi × method × model)\n"
+            "         └─> src/training/trainer.py (dispatch berdasarkan framework)\n"
+            "               ├─ tensorflow ─> subprocess: model/legacy_or_wrappers/<model>.py\n"
+            "               │                   └─> training_common.run_training_pipeline()\n"
+            "               └─ yolo ───────> subprocess: model/legacy_or_wrappers/yolov8.py\n\n"
+            "INFERENCE / PREDIKSI\n"
+            "web/app.py (Streamlit)\n"
+            "   └─> src/inference/model_loader.py  (muat bobot terbaik per model)\n"
+            "         └─> src/inference/predictor.py (preprocess + predict + pemetaan label)",
+            language="text",
+        )
+        st.markdown("**Sumber konfigurasi tunggal (`configs/`)**")
+        st.markdown(
+            "- `datasets.yaml` — daftar dataset, rasio split, ukuran resize.\n"
+            "- `models.yaml` — daftar model, framework, `preprocess_key`, family, status aktif.\n"
+            "- `training_methods.yaml` — strategi training (baseline / transfer learning / dst).\n"
+            "- `default_training.yaml` — hyperparameter default.\n"
+            "- `augmentations.yaml` — profil augmentasi."
+        )
+
+    # ------------------------------------------------------------------ #
+    with sec_split:
+        st.markdown("### Proses Split Data (Train / Test / Validation)")
+        st.markdown(
+            "Tujuan split adalah memisahkan data untuk **melatih** (train), **menyetel/menghentikan** training "
+            "(validation), dan **mengukur kinerja akhir secara jujur** (testing) pada data yang belum pernah dilihat model."
+        )
+        st.markdown("#### Kebijakan split saat ini")
+        st.markdown(
+            "1. **Split dilakukan pada gambar asli terlebih dahulu** (stratified per kelas) — sebelum augmentasi apa pun.\n"
+            "2. **Balancing kelas (rotasi) hanya diterapkan pada data train.** Sumber rotasi diambil eksklusif dari "
+            "gambar train kelas tersebut.\n"
+            "3. **Testing & validation berisi 100% gambar asli** (tidak ada gambar sintetis) — agar metrik valid.\n"
+            "4. Rasio **testing = validation** (split simetris); sisa pembulatan masuk ke train."
+        )
+        st.success(
+            "Desain ini mencegah **kebocoran data (data leakage)**: tidak ada gambar (atau rotasinya) yang "
+            "muncul di lebih dari satu split. Inilah syarat agar akurasi/AUC yang dilaporkan jujur — krusial untuk "
+            "model medis."
+        )
+        st.markdown("#### Rumus jumlah split per kelas")
+        st.latex(r"n_{test} = \lfloor N_{kelas} \cdot r_{test} \rfloor,\quad n_{val} = n_{test},\quad n_{train} = N_{kelas} - n_{test} - n_{val}")
+        st.markdown("#### Balancing train (oversampling minoritas)")
+        st.markdown(
+            "Setelah split, jumlah train tiap kelas dinaikkan hingga sama dengan kelas mayoritas, dengan "
+            "menambahkan salinan **rotasi acak** ($-20^\\circ$ s/d $+20^\\circ$) dari gambar train kelas itu. "
+            "Ini membantu model tidak bias ke kelas yang datanya lebih banyak."
+        )
+        try:
+            presets = sorted(SPLIT_PRESETS.keys())
+            preset_rows = []
+            for name in presets:
+                cfg = SPLIT_PRESETS[name]
+                preset_rows.append(
+                    {
+                        "Preset": name,
+                        "Train": f"{cfg['train']*100:.0f}%",
+                        "Testing": f"{cfg['testing']*100:.0f}%",
+                        "Validation": f"{cfg['validation']*100:.0f}%",
+                    }
+                )
+            st.markdown("#### Preset split tersedia")
+            st.table(pd.DataFrame(preset_rows))
+        except Exception as exc:  # pragma: no cover - tampilan defensif
+            st.caption(f"(Tidak dapat memuat preset split: {exc})")
+        st.markdown("#### Artefak yang dihasilkan")
+        st.markdown(
+            "Setiap split menulis `split_manifest.json` ke folder `_metadata/` berisi statistik per kelas, "
+            "jumlah augmentasi train, dan hasil **validasi anti-leakage** (`balance_validation`): train seimbang, "
+            "`testing == validation`, dan tidak ada gambar sintetis di test/validation. Jika gagal, training akan "
+            "dihentikan otomatis."
+        )
+
+    # ------------------------------------------------------------------ #
+    with sec_prep:
+        st.markdown("### Preprocessing Gambar")
+        st.markdown(
+            "Preprocessing menormalkan piksel gambar ke rentang/format yang sama seperti saat backbone dilatih. "
+            "Pada sistem ini, **layer preprocessing ditanam di dalam model** saat training, sehingga model menerima "
+            "**piksel mentah RGB [0, 255]** dan menormalkannya sendiri."
+        )
+        st.warning(
+            "Konsekuensi penting untuk inferensi: aplikasi **tidak boleh** menormalkan gambar lagi sebelum prediksi "
+            "(model sudah melakukannya di dalam). Menerapkan dua kali akan merusak prediksi (double preprocessing). "
+            "Aplikasi saat ini sudah memberi piksel mentah ke model — konsisten dengan training."
+        )
+        st.markdown("#### Normalisasi per keluarga model")
+        st.table(
+            pd.DataFrame(
+                [
+                    {"Keluarga / Model": "ResNet / ResNeXt / VGG", "Normalisasi": "Caffe-style: RGB→BGR + kurangi rata-rata ImageNet"},
+                    {"Keluarga / Model": "MobileNetV2 / Inception", "Normalisasi": "Skala ke rentang [-1, 1]"},
+                    {"Keluarga / Model": "EfficientNet / DenseNet", "Normalisasi": "Normalisasi standar Keras-applications"},
+                    {"Keluarga / Model": "Transformer (ViT/Swin/DeiT)", "Normalisasi": "Rescaling: x/127.5 - 1 → [-1, 1]"},
+                    {"Keluarga / Model": "YOLOv8", "Normalisasi": "Ditangani internal oleh ultralytics (skala 0-1)"},
+                ]
+            )
+        )
+        st.markdown(
+            "Selain normalisasi, gambar di-*resize* ke ukuran input model (default **224×224**). Ukuran ini "
+            "ditentukan saat training dan diikuti otomatis saat inferensi (dibaca dari `model.input_shape`)."
+        )
+
+    # ------------------------------------------------------------------ #
+    with sec_aug:
+        st.markdown("### Augmentasi Data")
+        st.markdown(
+            "Augmentasi memperbanyak variasi data train agar model lebih tahan terhadap variasi nyata "
+            "(posisi, kemiringan, pencahayaan) dan mengurangi overfitting. **Augmentasi hanya diterapkan pada data "
+            "train** — validation dan testing tidak pernah diaugmentasi agar evaluasi tetap mencerminkan data asli."
+        )
+        st.markdown("#### Dua lapis augmentasi pada sistem ini")
+        st.markdown(
+            "1. **Balancing offline (saat split)** — rotasi acak untuk menyamakan jumlah kelas, hanya pada train.\n"
+            "2. **Augmentasi on-the-fly (saat training)** — transformasi acak setiap epoch, hanya pada train, mencakup:\n"
+            "   rotasi, translasi, zoom, brightness, contrast, gaussian noise, dan random erasing."
+        )
+        try:
+            aug_ids = augmentation_registry.list_augmentation_ids()
+            if aug_ids:
+                st.markdown("#### Profil augmentasi terdaftar")
+                st.write(", ".join(f"`{a}`" for a in aug_ids))
+        except Exception as exc:  # pragma: no cover
+            st.caption(f"(Tidak dapat memuat profil augmentasi: {exc})")
+        st.info(
+            "Karena augmentasi train-only, model belajar dari variasi yang kaya, namun diuji pada gambar asli "
+            "apa adanya — ini praktik standar untuk mengukur generalisasi secara jujur."
+        )
+
+    # ------------------------------------------------------------------ #
+    with sec_model:
+        st.markdown("### Arsitektur & Daftar Model")
+        st.markdown(
+            "Sistem mendukung tiga keluarga model: **CNN** (jaringan konvolusi klasik), **Transformer** "
+            "(berbasis attention), dan **YOLO** (classifier dari ultralytics). Sebagian besar CNN memakai bobot "
+            "**pretrained ImageNet** sehingga bisa memanfaatkan *transfer learning*."
+        )
+        try:
+            rows = []
+            for cfg in model_registry.list_models(enabled_only=False):
+                rows.append(
+                    {
+                        "Model": cfg.display_name,
+                        "Keluarga": cfg.family,
+                        "Framework": cfg.framework,
+                        "Bobot awal": _doc_pretrained_label(cfg),
+                        "Status": "Aktif" if cfg.enabled else "Nonaktif",
+                    }
+                )
+            st.table(pd.DataFrame(rows))
+        except Exception as exc:  # pragma: no cover
+            st.caption(f"(Tidak dapat memuat daftar model: {exc})")
+        st.markdown("#### Cara kerja singkat tiap keluarga")
+        st.markdown(
+            "- **CNN pretrained** (MobileNetV2, ResNet50/152, VGG16/19, Inception, EfficientNet, DenseNet121): "
+            "backbone yang sudah belajar fitur visual umum dari ImageNet, lalu disesuaikan ke data Parkinson "
+            "lewat dua tahap (lihat tab *Proses Training*).\n"
+            "- **ResNeXt50**: implementasi kustom dengan *grouped convolution*; pada sistem ini dilatih dari bobot acak.\n"
+            "- **Transformer (ViT/Swin/DeiT)**: membagi gambar menjadi patch dan memodelkan relasi antar-patch via "
+            "*self-attention*. Pada sistem ini arsitekturnya kustom dan dilatih dari nol (lihat batasan di tab terakhir).\n"
+            "- **YOLOv8 Classifier**: jaringan ringan dari ultralytics dengan penjadwalan LR kosinus + warmup."
+        )
+
+    # ------------------------------------------------------------------ #
+    with sec_train:
+        st.markdown("### Proses Training")
+        st.markdown(
+            "Model TensorFlow dilatih dengan **strategi dua tahap (two-stage transfer learning)**, sedangkan YOLO "
+            "memakai satu tahap dengan penjadwalan LR internal."
+        )
+        st.markdown("#### Tahap training (model TensorFlow)")
+        st.markdown(
+            "**Stage 1 — Feature extraction:** backbone pretrained **dibekukan**, hanya *head* klasifikasi yang dilatih. "
+            "Model belajar memetakan fitur ImageNet ke kelas Parkinson dengan cepat.\n\n"
+            "**Stage 2 — Fine-tuning:** sebagian backbone **dibuka** (sesuai `fine_tune_freeze_ratio`) dan dilatih ulang "
+            "dengan *learning rate* kecil agar fitur menyesuaikan ciri halus (mis. tremor pada spiral) tanpa merusak "
+            "pengetahuan ImageNet."
+        )
+        st.markdown("#### Komponen kunci")
+        st.markdown(
+            "- **Class weight (balanced):** loss kelas minoritas diberi bobot lebih besar untuk menekan *false negative* "
+            "(penderita salah diklasifikasikan sehat).\n"
+            "- **Callback dipantau `val_accuracy`:** `ModelCheckpoint` (simpan bobot terbaik), `EarlyStopping` "
+            "(berhenti bila tidak membaik), `ReduceLROnPlateau` (turunkan LR saat stagnan).\n"
+            "- **Output layer `float32`:** menjaga kestabilan numerik saat *mixed precision* aktif.\n"
+            "- **Reproducibility:** `seed` konsisten di semua framework."
+        )
+        st.latex(r"w_c = \frac{N_{total}}{K \cdot n_c}\quad\text{(bobot kelas } c,\ K=\text{jumlah kelas)}")
+        try:
+            cfg = load_default_training_config().get("default_training", {}) or {}
+            hp_rows = [
+                {"Parameter": "image_size", "Nilai": cfg.get("image_size", "—"), "Keterangan": "Ukuran input model"},
+                {"Parameter": "batch_size", "Nilai": cfg.get("batch_size", "—"), "Keterangan": "Jumlah gambar per langkah"},
+                {"Parameter": "epochs", "Nilai": cfg.get("epochs", "—"), "Keterangan": "Epoch Stage 1"},
+                {"Parameter": "fine_tune_epochs", "Nilai": cfg.get("fine_tune_epochs", "—"), "Keterangan": "Epoch Stage 2"},
+                {"Parameter": "learning_rate", "Nilai": cfg.get("learning_rate", "—"), "Keterangan": "LR Stage 1"},
+                {"Parameter": "fine_tune_learning_rate", "Nilai": cfg.get("fine_tune_learning_rate", "—"), "Keterangan": "LR Stage 2 (kecil)"},
+                {"Parameter": "fine_tune_freeze_ratio", "Nilai": cfg.get("fine_tune_freeze_ratio", "—"), "Keterangan": "Porsi backbone tetap beku di Stage 2"},
+                {"Parameter": "dropout", "Nilai": cfg.get("dropout", "—"), "Keterangan": "Regularisasi head"},
+                {"Parameter": "early_stopping_patience", "Nilai": cfg.get("early_stopping_patience", "—"), "Keterangan": "Sabar early stopping"},
+                {"Parameter": "seed", "Nilai": cfg.get("seed", "—"), "Keterangan": "Random seed"},
+            ]
+            st.markdown("#### Hyperparameter default (dari `configs/default_training.yaml`)")
+            st.table(pd.DataFrame(hp_rows))
+        except Exception as exc:  # pragma: no cover
+            st.caption(f"(Tidak dapat memuat hyperparameter default: {exc})")
+        try:
+            method_rows = []
+            for mid in method_registry.list_method_ids():
+                m = method_registry.get(mid)
+                ov = m.arg_overrides or {}
+                method_rows.append(
+                    {
+                        "Method": mid,
+                        "Deskripsi": m.description or "—",
+                        "Pretrained": "Tidak" if ov.get("no_pretrained") else "Ya",
+                        "epochs": ov.get("epochs", "default"),
+                        "fine_tune_epochs": ov.get("fine_tune_epochs", "default"),
+                    }
+                )
+            st.markdown("#### Strategi training tersedia (dari `configs/training_methods.yaml`)")
+            st.table(pd.DataFrame(method_rows))
+        except Exception as exc:  # pragma: no cover
+            st.caption(f"(Tidak dapat memuat daftar method: {exc})")
+        try:
+            opt_rows = [{"Optimizer": k, "Keterangan": v} for k, v in OPTIMIZER_DESCRIPTIONS.items()]
+            if opt_rows:
+                st.markdown("#### Optimizer tersedia")
+                st.table(pd.DataFrame(opt_rows))
+        except Exception as exc:  # pragma: no cover
+            st.caption(f"(Tidak dapat memuat optimizer: {exc})")
+
+    # ------------------------------------------------------------------ #
+    with sec_eval:
+        st.markdown("### Evaluasi & Metrik")
+        st.markdown(
+            "Setelah training, model dievaluasi pada **testing set (gambar asli, belum pernah dilihat)**. Metrik "
+            "yang dilaporkan dirancang agar tetap bermakna meski kelas tidak seimbang."
+        )
+        st.table(
+            pd.DataFrame(
+                [
+                    {"Metrik": "Accuracy", "Arti": "Proporsi prediksi benar dari seluruh sampel"},
+                    {"Metrik": "ROC-AUC", "Arti": "Kemampuan memisahkan kelas pada berbagai ambang; 1.0 = sempurna"},
+                    {"Metrik": "Precision (macro)", "Arti": "Dari yang diprediksi positif, berapa yang benar (rata-rata antar kelas)"},
+                    {"Metrik": "Recall (macro)", "Arti": "Dari yang sebenarnya positif, berapa yang tertangkap (penting untuk medis)"},
+                    {"Metrik": "Confusion Matrix", "Arti": "Tabel benar/salah per kelas, untuk melihat pola kesalahan"},
+                ]
+            )
+        )
+        st.info(
+            "Untuk diagnosis medis, **Recall** kelas penderita sangat penting: lebih baik waspada (false positive) "
+            "daripada melewatkan penderita (false negative). Karena itu sistem memakai class weight saat training."
+        )
+        st.caption("Grafik dan tabel metrik lengkap per run tersedia di tab **Training Report**.")
+
+    # ------------------------------------------------------------------ #
+    with sec_notes:
+        st.markdown("### Catatan & Batasan Penting")
+        st.markdown(
+            "- **Transformer dilatih dari nol.** ViT/Swin/DeiT belum memakai bobot pretrained, sehingga pada "
+            "dataset kecil hasilnya cenderung di bawah CNN pretrained. **Jangan membandingkan langsung** hasil "
+            "transformer dengan CNN pretrained sampai strategi pretrained diterapkan.\n"
+            "- **Split berbasis gambar.** Jika satu pasien menyumbang lebih dari satu gambar, idealnya semua gambar "
+            "pasien tersebut berada di split yang sama (split per-pasien) untuk benar-benar bebas kebocoran. "
+            "Pastikan asumsi 'satu gambar mewakili subjek independen' sesuai dengan dataset Anda.\n"
+            "- **Konsistensi train ↔ inferensi.** Preprocessing harus identik antara training dan prediksi; sistem "
+            "saat ini sudah konsisten (model menormalkan sendiri, aplikasi mengirim piksel mentah).\n"
+            "- **Dependency berat.** Lingkungan memuat TensorFlow dan (untuk YOLO) PyTorch; pastikan instalasi diuji "
+            "di server target sebelum deployment."
+        )
+        st.caption("Ringkasan ini mencerminkan kondisi aplikasi saat dokumentasi dibuat. Untuk detail teknis "
+                   "lengkap, lihat folder `documentation/` pada repository.")
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Parkinson Classification Dashboard",
@@ -1754,11 +2127,12 @@ def main() -> None:
     st.title("Parkinson Classification Dashboard")
     st.caption("Visualisasi dataset, report training bertingkat, perbandingan eksperimen, dan prediksi model.")
 
-    tab_dataset, tab_training, tab_report, tab_predict = st.tabs([
+    tab_dataset, tab_training, tab_report, tab_predict, tab_docs = st.tabs([
         "Dataset",
         "Training",
         "Training Report",
         "Prediksi",
+        "Dokumentasi",
     ])
 
     with tab_dataset:
@@ -1779,6 +2153,13 @@ def main() -> None:
         )
     with tab_predict:
         render_prediction_tab(
+            dataset_registry=dataset_registry,
+            model_registry=model_registry,
+            augmentation_registry=augmentation_registry,
+            method_registry=method_registry,
+        )
+    with tab_docs:
+        render_documentation_tab(
             dataset_registry=dataset_registry,
             model_registry=model_registry,
             augmentation_registry=augmentation_registry,

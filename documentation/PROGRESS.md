@@ -20,11 +20,17 @@
 - [x] **BLOCKER-01** — Hapus double preprocessing di inference (`src/inference/predictor.py`,
       `prepare_tf_input`). Model TF sudah memuat layer preprocessing; inference kini
       memberi piksel mentah [0,255]. Verifikasi: prob train == prob inference utk gambar sama.
-- [ ] **BLOCKER-02** — Augmentasi rotasi dilakukan sebelum split → sintetis bocor ke test/val
-      (`src/datasets/splitter.py`). Wajib: split dulu, balancing hanya di train, lalu re-split + retrain.
+- [x] **BLOCKER-02** — Splitter ditulis ulang: split dulu, balancing train-only, test/val real-only
+      (`src/datasets/splitter.py`, schema manifest 1.3.0). Validator jadi guard anti-leakage. Lulus uji dummy.
+      ⏳ Sisa: hapus split lama + re-split + latih ulang semua model (split lama tercemar).
 - [ ] **BLOCKER-03** — Split per-gambar bukan per-pasien; konfirmasi 1 gambar/pasien atau buat split per-pasien.
 - [ ] **DEP-01** — Uji `pip install` di server bersih + pin `torch` di `requirements.txt`.
 - [ ] **ISU-07** — Transformer dari nol; opsi cepat: `enabled: false` vit/swin/deit di `configs/models.yaml`.
+
+## T1c — Tab Dokumentasi di dashboard (2026-06-04)
+- [x] Tambah `render_documentation_tab()` + tab "Dokumentasi" di `web/app.py` (9 sub-bagian:
+      cara menjalankan, alur sistem, split, preprocessing, augmentasi, model, training, evaluasi, batasan).
+      Konten daftar model/method/optimizer/preset diambil dinamis dari registry. Lulus smoke test render.
 
 ## T2 — Folder optimizer (`src/optimizer/`)
 - [x] `src/optimizer/adam.py` (wrapper Adam)

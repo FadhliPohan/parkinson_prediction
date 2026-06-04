@@ -365,7 +365,8 @@ def _assert_split_balance(split_manifest: Dict[str, Any], source_label: str) -> 
         )
 
     print(
-        "[VALIDASI] Split {} seimbang: after_counts/train/testing/validation balanced.".format(source_label)
+        "[VALIDASI] Split {} valid: train seimbang, test==validation, "
+        "tanpa gambar sintetis di test/validation (anti-leakage).".format(source_label)
     )
 
 

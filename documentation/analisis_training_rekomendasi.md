@@ -13,7 +13,7 @@ Audit ulang sebelum deployment menemukan **tiga isu yang TIDAK tercatat di versi
 | Kode | Isu | Dampak | Prioritas |
 |---|---|---|---|
 | **BLOCKER-01** | Double preprocessing di inference | **Aplikasi deploy memberi prediksi salah** untuk SEMUA model TF | ✅ **SUDAH DIPERBAIKI (2026-06-04)** |
-| **BLOCKER-02** | Data leakage: augmentasi rotasi sebelum split | **Metrik test/val tidak valid (inflated)** — sebagian test set berisi gambar sintetis | 🔴 KRITIS |
+| **BLOCKER-02** | Data leakage: augmentasi rotasi sebelum split | **Metrik test/val tidak valid (inflated)** — sebagian test set berisi gambar sintetis | ✅ **SUDAH DIPERBAIKI (2026-06-04)** |
 | **BLOCKER-03** | Split per-gambar, bukan per-pasien | Potensi leakage jika 1 pasien punya >1 gambar | 🟠 TINGGI (perlu konfirmasi dataset) |
 | **DEP-01** | `requirements.txt` belum diverifikasi + `torch` tidak di-pin | Risiko gagal install / konflik CUDA di server | 🟠 TINGGI |
 | **ISU-07** | Transformer dilatih dari nol | Hasil family transformer tidak sebanding dengan CNN | 🟡 SEDANG |
@@ -81,7 +81,10 @@ Tidak ada error yang muncul — aplikasi tetap memberi label dan confidence — 
 
 ---
 
-### BLOCKER-02: Data Leakage — Augmentasi Rotasi Dilakukan SEBELUM Split (🔴 KRITIS)
+### BLOCKER-02: Data Leakage — Augmentasi Rotasi Dilakukan SEBELUM Split (✅ SUDAH DIPERBAIKI 2026-06-04)
+
+> **Status perbaikan:** [splitter.py](src/datasets/splitter.py) ditulis ulang: gambar asli di-split dulu (`_split_real_per_class`, stratified), lalu balancing rotasi **hanya pada train** (`_balance_train_per_class`, sumber rotasi eksklusif dari gambar train kelas yang sama). Test & validation kini **100% gambar asli (0 sintetis)**. Validator (`validate_balanced_split_manifest`) diubah menjadi guard anti-leakage: `is_balanced=True` hanya jika train seimbang **dan** `test==validation` **dan** tidak ada sintetis di test/validation. Schema manifest dinaikkan ke `1.3.0`. **Sudah diverifikasi** lewat uji dataset dummy tidak seimbang (30 vs 12): train jadi 22 vs 22 seimbang, test/val proporsional real-only, `no_leakage_in_eval=True`. **Tindak lanjut wajib:** hapus folder split lama & lakukan re-split + latih ulang semua model (split lama masih tercemar). Penjelasan akar masalah di bawah dipertahankan sebagai catatan.
+
 
 **Lokasi:** [splitter.py:217-238](src/datasets/splitter.py#L217-L238) (pembuatan sampel sintetis), dipanggil di [splitter.py:376-395](src/datasets/splitter.py#L376-L395) (split setelahnya).
 

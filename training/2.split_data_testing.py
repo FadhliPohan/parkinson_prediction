@@ -73,7 +73,10 @@ def _assert_split_balance(manifest, source_label: str) -> None:
                 source_label
             )
         )
-    print("[VALIDASI] Split {} seimbang antar kelas.".format(source_label))
+    print(
+        "[VALIDASI] Split {} valid: train seimbang, test==validation, "
+        "tanpa gambar sintetis di test/validation (anti-leakage).".format(source_label)
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

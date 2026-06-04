@@ -209,6 +209,12 @@ File utama:
 3. Tab `Prediksi`:
    - pilih kombinasi dataset/augmentasi/method,
    - bandingkan prediksi beberapa model lintas run.
+4. Tab `Dokumentasi`:
+   - penjelasan akademis & teknis aplikasi untuk pengguna: cara menjalankan, alur sistem
+     end-to-end, proses split data (anti-leakage), preprocessing, augmentasi, arsitektur model,
+     proses training dua tahap, serta evaluasi & metrik.
+   - daftar model/method/optimizer/preset split diambil dinamis dari konfigurasi aktif
+     (selalu sinkron dengan sistem).
 
 ## 10. Menambah Komponen Baru
 
