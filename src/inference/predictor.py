@@ -15,7 +15,9 @@ def preprocess_transformer_input(inputs: np.ndarray) -> np.ndarray:
 MODEL_PREPROCESSORS = {
     "mobilenetv2": tf.keras.applications.mobilenet_v2.preprocess_input,
     "resnet50": tf.keras.applications.resnet50.preprocess_input,
+    "vgg16": tf.keras.applications.vgg16.preprocess_input,
     "vgg19": tf.keras.applications.vgg19.preprocess_input,
+    "resnext50": tf.keras.applications.resnet50.preprocess_input,
     "resnet152": tf.keras.applications.resnet.preprocess_input,
     "inception_googlenet": tf.keras.applications.inception_v3.preprocess_input,
     "efficientnet": tf.keras.applications.efficientnet.preprocess_input,

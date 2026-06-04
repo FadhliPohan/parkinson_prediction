@@ -116,6 +116,14 @@ parkinson_prediction/
    - `cnn`
    - `transformer`
    - `yolo`
+5. Daftar model aktif per family:
+   - **CNN (9 model)**: `mobilenetv2`, `resnet50`, `vgg16`, `vgg19`, `resnext50`,
+     `resnet152`, `inception_googlenet`, `efficientnet`, `densenet121`.
+   - **Transformer (3 model)**: `vit`, `swintransformer`, `deit`.
+   - **YOLO (1 model)**: `yolov8`.
+6. Setiap `preprocess_key` di `configs/models.yaml` terdaftar di
+   `src/inference/predictor.py` (`MODEL_PREPROCESSORS`) untuk preprocessing
+   gambar saat inferensi.
 
 ## 7. Method Registry dan Training Strategy
 1. Method training terdaftar di `configs/training_methods.yaml`.
@@ -277,6 +285,48 @@ streamlit run web/app.py
 6. **Catatan**: perbaikan strategi Transformer (pretrained/resep khusus) DITUNDA;
    placeholder/TODO ada di kode dan dokumen rekomendasi (REC-09).
 
-## 19. Catatan Sinkronisasi
+## 19. Penambahan Model VGG16 dan ResNeXt50 (2026-06-04)
+
+Dua model CNN baru ditambahkan ke family `cnn`:
+
+### VGG16
+- **Script**: `model/legacy_or_wrappers/vgg16.py`
+- **Backbone**: `tf.keras.applications.VGG16` (pretrained ImageNet tersedia)
+- **Preprocessing**: `tf.keras.applications.vgg16.preprocess_input` (VGG-style mean subtraction)
+- **Preprocess key** (inference): `"vgg16"`
+- **Catatan**: Arsitektur identik dengan VGG19 tetapi lebih ringan (16 layer konvolutif vs 19).
+
+### ResNeXt-50-32x4d
+- **Script**: `model/legacy_or_wrappers/resnext50.py`
+- **Backbone**: Implementasi kustom di `model/legacy_or_wrappers/resnext_backbones.py`
+- **Preprocessing**: ResNet50-style (keluarga arsitektur sama)
+- **Preprocess key** (inference): `"resnext50"`
+- **Catatan arsitektur**:
+  - `cardinality = 32`, `base_width = 4` → ResNeXt-50-**32x4d**
+  - 4 stage (3-4-6-3 blok), output 2048 channel
+  - Grouped convolution: `tf.keras.layers.Conv2D(groups=32)` tersedia di TF 2.x
+  - ~23 juta parameter
+  - Bobot ImageNet pretrained tidak tersedia untuk implementasi kustom ini;
+    `build_model()` di `training_common.py` menangani fallback ke random init secara
+    otomatis melalui mekanisme `try/except` yang sudah ada.
+- **File terkait**:
+  - `model/legacy_or_wrappers/resnext_backbones.py` — arsitektur + preprocessing fn
+  - `model/legacy_or_wrappers/resnext50.py` — wrapper entry point
+- **Mengapa kustom?** `tf.keras.applications` tidak menyediakan ResNeXt secara native.
+  Pola implementasi mengikuti `transformer_backbones.py` (builder function dengan
+  signature `include_top`, `weights`, `input_shape`).
+
+### Perubahan file terdampak
+| File | Perubahan |
+|---|---|
+| `model/legacy_or_wrappers/vgg16.py` | Baru — wrapper VGG16 |
+| `model/legacy_or_wrappers/resnext_backbones.py` | Baru — implementasi ResNeXt50 |
+| `model/legacy_or_wrappers/resnext50.py` | Baru — wrapper ResNeXt50 |
+| `configs/models.yaml` | Tambah entry `vgg16` dan `resnext50` |
+| `src/inference/predictor.py` | Tambah `"vgg16"` dan `"resnext50"` di `MODEL_PREPROCESSORS` |
+
+---
+
+## 20. Catatan Sinkronisasi
 1. `documentation/architecture.md` adalah sumber utama arsitektur.
 2. `documentation/arsitectur.md` adalah mirror isi agar kompatibel dengan penamaan lama.

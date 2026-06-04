@@ -15,11 +15,27 @@ models:
     family: "cnn"
     enabled: true
 
+  vgg16:
+    display_name: "VGG16"
+    script_path: "model/legacy_or_wrappers/vgg16.py"
+    framework: "tensorflow"
+    preprocess_key: "vgg16"
+    family: "cnn"
+    enabled: true
+
   vgg19:
     display_name: "VGG19"
     script_path: "model/legacy_or_wrappers/vgg19.py"
     framework: "tensorflow"
     preprocess_key: "vgg19"
+    family: "cnn"
+    enabled: true
+
+  resnext50:
+    display_name: "ResNeXt-50-32x4d"
+    script_path: "model/legacy_or_wrappers/resnext50.py"
+    framework: "tensorflow"
+    preprocess_key: "resnext50"
     family: "cnn"
     enabled: true
 

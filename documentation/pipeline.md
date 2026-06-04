@@ -25,7 +25,9 @@ Fokus dokumen:
    - Family `cnn`:
      - `mobilenetv2`
      - `resnet50`
+     - `vgg16` *(baru)*
      - `vgg19`
+     - `resnext50` *(baru — ResNeXt-50-32x4d, grouped convolutions)*
      - `resnet152`
      - `inception_googlenet`
      - `efficientnet`

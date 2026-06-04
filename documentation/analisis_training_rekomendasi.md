@@ -59,7 +59,8 @@ history_stage2 = model.fit(
 
 **Kesimpulan:** Early stopping **sudah ada** tetapi mengandung beberapa isu teknis yang dijelaskan di bagian 3.
 
-> **Catatan penting (hasil verifikasi):** Model **CNN** (MobileNetV2, ResNet50/152, VGG19, EfficientNet, DenseNet121, Inception) memanggil `tf.keras.applications.*` sebagai `backbone_builder`, sehingga benar-benar memuat bobot **ImageNet** saat `use_pretrained=True`.
+> **Catatan penting (hasil verifikasi):** Model **CNN** (MobileNetV2, ResNet50/152, VGG16, VGG19, EfficientNet, DenseNet121, Inception) memanggil `tf.keras.applications.*` sebagai `backbone_builder`, sehingga benar-benar memuat bobot **ImageNet** saat `use_pretrained=True`.
+> **ResNeXt50** menggunakan implementasi kustom (`resnext_backbones.py`) yang **tidak memiliki bobot pretrained**; backbone selalu diinisialisasi secara acak — training_common.py menangani fallback ini secara otomatis melalui `try/except`. Efek di setiap method: ResNeXt50 berperilaku seperti `baseline` (random init) terlepas dari method yang dipilih, mirip dengan family transformer (ISU-07).
 >
 > Sebaliknya, model **Transformer** (ViT, SwinTransformer, DeiT) memakai builder custom di `model/legacy_or_wrappers/transformer_backbones.py` (`build_vit_backbone`, `build_swin_transformer_backbone`, `build_deit_backbone`). Builder ini **mengabaikan argumen `weights`** dan **selalu membangun arsitektur dari nol (random init)** — tidak ada bobot pretrained. Akibatnya transfer learning tidak berlaku untuk transformer (lihat ISU-07).
 
@@ -409,9 +410,12 @@ Panduan umum per backbone:
 | Model | Rekomendasi LR Fine-Tune |
 |---|---|
 | MobileNetV2, EfficientNet (ringan) | 1e-4 |
-| ResNet50, VGG19, InceptionV3 | 5e-5 |
+| ResNet50, VGG16, VGG19, InceptionV3 | 5e-5 |
 | ResNet152, DenseNet121 (besar) | 3e-5 |
+| ResNeXt50 (random init — fine-tune tidak berlaku) | — *|
 | ViT, SwinTransformer, DeiT | 1e-5 hingga 3e-5 |
+
+*ResNeXt50 dilatih dari nol (tidak ada pretrained), sehingga pembagian Stage 1/Stage 2 tidak relevan. Pertimbangkan LR lebih besar (1e-3 s/d 1e-4) untuk konvergensi lebih cepat dari random init.
 
 ---
 

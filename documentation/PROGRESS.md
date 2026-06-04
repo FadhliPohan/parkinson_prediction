@@ -1,6 +1,6 @@
 # PROGRESS — Tracking Pekerjaan
 
-> Update: 2026-06-03. Checklist seluruh tugas. `- [x]` selesai, `- [ ]` belum,
+> Update: 2026-06-04. Checklist seluruh tugas. `- [x]` selesai, `- [ ]` belum,
 > `- [~]` sebagian/ditunda dengan catatan.
 
 ## T1 — Terapkan rekomendasi dokumen
@@ -71,7 +71,23 @@
 ## T10 — File tracking
 - [x] `documentation/PROGRESS.md` (file ini)
 
+## T11 — Tambah Model VGG16 & ResNeXt50 (2026-06-04)
+- [x] `model/legacy_or_wrappers/vgg16.py` — wrapper VGG16 (tf.keras.applications, pretrained ImageNet)
+- [x] `model/legacy_or_wrappers/resnext_backbones.py` — implementasi ResNeXt-50-32x4d dari scratch
+      (grouped conv, cardinality=32, base_width=4, ~23M params)
+- [x] `model/legacy_or_wrappers/resnext50.py` — wrapper ResNeXt50
+- [x] `configs/models.yaml` — tambah entry `vgg16` dan `resnext50` (family cnn)
+- [x] `src/inference/predictor.py` — tambah `"vgg16"` dan `"resnext50"` di `MODEL_PREPROCESSORS`
+- [x] Dokumentasi diperbarui:
+      `architecture.md` (section 6 + section 19 baru),
+      `pipeline.md` (daftar model aktif),
+      `analisis_training_rekomendasi.md` (catatan ISU + REC-05 tabel LR),
+      `PROGRESS.md` (file ini)
+- [x] Verifikasi build: VGG16 output (None,7,7,512) ✓ | ResNeXt50 output (None,7,7,2048) ✓
+- [x] Verifikasi registry: kedua model terbaca oleh `ModelRegistry` ✓
+
 ## Verifikasi
 - [x] `py_compile` semua file yang diubah → OK
 - [x] Uji fungsi optimizer registry & resolusi/validasi split → OK
+- [x] Uji build backbone VGG16 + ResNeXt50 → OK (verified 2026-06-04)
 - [ ] Uji training end-to-end nyata (butuh dataset + GPU/CPU; dijalankan user)
