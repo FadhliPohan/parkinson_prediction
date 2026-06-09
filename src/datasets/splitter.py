@@ -27,6 +27,71 @@ SPLIT_PRESETS: Dict[str, Dict[str, float]] = {
     "70-15-15": {"train": 0.70, "testing": 0.15, "validation": 0.15},
 }
 
+# Token alias yang dianggap "pakai rasio default dari config dataset" (bukan preset eksplisit).
+_CONFIG_PRESET_ALIASES = {"", "config", "default", "none", "config-default"}
+
+
+def normalize_preset(preset: Optional[str]) -> Optional[str]:
+    """Normalisasi token preset.
+
+    Mengembalikan None untuk nilai yang berarti "pakai rasio default config"
+    (mis. None/"config"/"default"), atau key preset terstandar (mis. "80-10-10").
+    """
+    if preset is None:
+        return None
+    key = str(preset).strip().lower().replace("_", "-")
+    if key in _CONFIG_PRESET_ALIASES:
+        return None
+    return key
+
+
+def preset_label_for_ratios(split_cfg: Dict[str, float]) -> str:
+    """Label preset (mis. "80-10-10") yang diturunkan dari rasio split aktif."""
+    train = int(round(float(split_cfg.get("train", 0.0)) * 100))
+    testing = int(round(float(split_cfg.get("testing", 0.0)) * 100))
+    validation = int(round(float(split_cfg.get("validation", 0.0)) * 100))
+    return f"{train}-{testing}-{validation}"
+
+
+def split_dir_for_preset(base_split_path: Path, preset: Optional[str]) -> Path:
+    """Tentukan folder split untuk sebuah preset.
+
+    - preset None / "config" / "default" -> folder split dasar (kompatibel lama).
+    - preset eksplisit -> folder bersuffix, mis. ``<base>__80-10-10``.
+
+    Dengan begitu beberapa preset (mis. 80-10-10 dan 70-15-15) bisa hidup
+    berdampingan di disk tanpa saling menimpa.
+    """
+    norm = normalize_preset(preset)
+    if norm is None:
+        return base_split_path
+    return base_split_path.parent / f"{base_split_path.name}__{norm}"
+
+
+def resolve_preset_list(raw_value: Optional[str]) -> List[Optional[str]]:
+    """Ubah argumen preset (mis. "both"/"config"/"80-10-10,70-15-15") jadi daftar preset.
+
+    Setiap elemen adalah key preset ternormalisasi atau None (config-default).
+    Duplikat dibuang dengan mempertahankan urutan.
+    """
+    if raw_value is None or not str(raw_value).strip():
+        return [None]
+
+    normalized = str(raw_value).strip().lower()
+    if normalized in {"both", "all", "*"}:
+        return list(SPLIT_PRESETS.keys())
+
+    presets: List[Optional[str]] = []
+    seen = set()
+    for token in [item.strip() for item in str(raw_value).split(",") if item.strip()]:
+        norm = normalize_preset(token)
+        marker = norm or "__config__"
+        if marker in seen:
+            continue
+        seen.add(marker)
+        presets.append(norm)
+    return presets or [None]
+
 
 def validate_split_ratios(
     train: float,
@@ -380,6 +445,7 @@ def split_dataset(
     split_cfg: Dict[str, float],
     resize_cfg: Dict[str, Optional[Sequence[int]]],
     seed: int,
+    split_preset: Optional[str] = None,
 ) -> Dict[str, object]:
     class_entries = validate_dataset(
         dataset_root=original_dir,
@@ -388,6 +454,11 @@ def split_dataset(
     )
 
     train_ratio, test_ratio, validation_ratio = _ensure_valid_ratios(split_cfg)
+    # Label preset: pakai yang eksplisit bila ada, kalau tidak turunkan dari rasio.
+    normalized_preset = normalize_preset(split_preset)
+    preset_label = normalized_preset or preset_label_for_ratios(
+        {"train": train_ratio, "testing": test_ratio, "validation": validation_ratio}
+    )
     train_resize = _parse_resize(resize_cfg.get("train"))
     test_resize = _parse_resize(resize_cfg.get("testing"))
     validation_resize = _parse_resize(resize_cfg.get("validation"))
@@ -511,8 +582,9 @@ def split_dataset(
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "schema_version": "1.3.0",
+        "schema_version": "1.4.0",
         "seed": int(seed),
+        "split_preset": preset_label,
         "original_dir": str(original_dir),
         "split_dir": str(split_dir),
         "class_mode": class_mode,

@@ -12,8 +12,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.datasets.registry import DatasetRegistry
 from src.datasets.splitter import (
     SPLIT_PRESETS,
+    normalize_preset,
+    resolve_preset_list,
     resolve_split_cfg,
     split_dataset,
+    split_dir_for_preset,
     validate_balanced_split_manifest,
 )
 from src.datasets.validator import list_image_files
@@ -104,7 +107,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         choices=sorted(SPLIT_PRESETS.keys()),
-        help="Preset rasio split dinamis (mis. 80-10-10 atau 70-15-15).",
+        help="Preset rasio split tunggal (mis. 80-10-10 atau 70-15-15).",
+    )
+    parser.add_argument(
+        "--split-presets",
+        type=str,
+        default=None,
+        help=(
+            "Preset split (boleh banyak): 'both' (80-10-10 & 70-15-15), 'config' (rasio default config), "
+            "satu preset, atau daftar dipisah koma. Tiap preset disimpan di folder terpisah."
+        ),
     )
     parser.add_argument("--train-ratio", type=float, default=None, help="Override rasio train (0-1).")
     parser.add_argument("--test-ratio", type=float, default=None, help="Override rasio testing (0-1).")
@@ -112,29 +124,45 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    parser = _build_parser()
-    args = parser.parse_args()
+def _resolve_presets(args: argparse.Namespace):
+    """Tentukan daftar preset yang akan diproses.
 
-    registry = DatasetRegistry()
-    dataset_id = args.dataset or registry.default_dataset
-    dataset_cfg = registry.get(dataset_id)
+    Prioritas: --split-presets (multi/both) > --split-preset (tunggal) >
+    rasio manual / config (None = config-default).
+    """
+    if args.split_presets is not None and str(args.split_presets).strip():
+        return resolve_preset_list(args.split_presets)
+    if args.split_preset:
+        return [normalize_preset(args.split_preset)]
+    return [None]
 
-    original_dir = Path(args.dataset_dir).resolve() if args.dataset_dir else dataset_cfg.original_path
-    split_dir = Path(args.split_dir).resolve() if args.split_dir else dataset_cfg.split_path
-    seed = int(args.seed) if args.seed is not None else int(dataset_cfg.seed)
-    class_mode = args.class_mode or dataset_cfg.class_mode
 
-    # Split dinamis: preset / rasio manual / fallback config dataset.
+def _process_one_preset(
+    dataset_id: str,
+    dataset_cfg,
+    preset,
+    original_dir: Path,
+    base_split_dir: Path,
+    seed: int,
+    class_mode: str,
+    args: argparse.Namespace,
+    explicit_split_dir: bool,
+) -> None:
+    split_dir = base_split_dir if explicit_split_dir else split_dir_for_preset(base_split_dir, preset)
+
+    # Rasio split untuk preset ini (preset eksplisit -> rasio preset;
+    # None -> rasio manual/config).
     split_cfg = resolve_split_cfg(
-        preset=args.split_preset,
-        train=args.train_ratio,
-        testing=args.test_ratio,
-        validation=args.val_ratio,
+        preset=preset,
+        train=args.train_ratio if preset is None else None,
+        testing=args.test_ratio if preset is None else None,
+        validation=args.val_ratio if preset is None else None,
         fallback=dataset_cfg.split,
     )
+    preset_label = normalize_preset(preset) or "config-default"
 
-    print("\n=== Split Dataset ===")
+    print("\n" + "=" * 60)
+    print("=== Split Dataset (preset: {}) ===".format(preset_label))
     print("Dataset ID   :", dataset_id)
     print("Original dir :", original_dir)
     print("Split dir    :", split_dir)
@@ -171,6 +199,7 @@ def main() -> None:
             split_cfg=split_cfg,
             resize_cfg=dataset_cfg.resize,
             seed=seed,
+            split_preset=preset,
         )
         source_label = "baru"
     else:
@@ -187,7 +216,7 @@ def main() -> None:
         source_label = "existing"
 
     split_stats = manifest.get("split_stats", {})
-    print("\n=== Ringkasan Split ===")
+    print("\n=== Ringkasan Split (preset: {}) ===".format(manifest.get("split_preset", preset_label)))
     for split_name in ["train", "testing", "validation"]:
         per_class = split_stats.get(split_name, {})
         total = sum(int(v) for v in per_class.values())
@@ -208,7 +237,49 @@ def main() -> None:
         else:
             print("Status      : Tidak perlu (dataset sudah seimbang)")
     _assert_split_balance(manifest, source_label=source_label)
-    print("Split selesai.")
+    print("Split preset '{}' selesai.".format(preset_label))
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    registry = DatasetRegistry()
+    dataset_id = args.dataset or registry.default_dataset
+    dataset_cfg = registry.get(dataset_id)
+
+    original_dir = Path(args.dataset_dir).resolve() if args.dataset_dir else dataset_cfg.original_path
+    explicit_split_dir = bool(args.split_dir)
+    base_split_dir = Path(args.split_dir).resolve() if explicit_split_dir else dataset_cfg.split_path
+    seed = int(args.seed) if args.seed is not None else int(dataset_cfg.seed)
+    class_mode = args.class_mode or dataset_cfg.class_mode
+
+    presets = _resolve_presets(args)
+    if explicit_split_dir and len(presets) > 1:
+        raise SystemExit(
+            "--split-dir tidak bisa dipakai bersamaan dengan beberapa preset (mis. 'both'). "
+            "Pilih satu preset atau lepas --split-dir."
+        )
+
+    preset_labels = [normalize_preset(p) or "config-default" for p in presets]
+    print("\n=== Rencana Split ===")
+    print("Dataset ID :", dataset_id)
+    print("Preset     :", ", ".join(preset_labels))
+
+    for preset in presets:
+        _process_one_preset(
+            dataset_id=dataset_id,
+            dataset_cfg=dataset_cfg,
+            preset=preset,
+            original_dir=original_dir,
+            base_split_dir=base_split_dir,
+            seed=seed,
+            class_mode=class_mode,
+            args=args,
+            explicit_split_dir=explicit_split_dir,
+        )
+
+    print("\nSemua proses split selesai untuk preset:", ", ".join(preset_labels))
 
 
 if __name__ == "__main__":

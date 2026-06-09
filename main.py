@@ -232,6 +232,35 @@ def ask_on_existing_mode() -> str:
     return selected.split(" ", 1)[0].strip()
 
 
+def ask_split_preset_selection(allow_both: bool = True) -> str:
+    """Pilih preset rasio split. Mengembalikan nilai untuk argumen --split-presets.
+
+    Nilai yang dikembalikan: "80-10-10", "70-15-15", "both", atau "config".
+    """
+    options = [
+        "config (pakai rasio default config dataset)",
+        "80-10-10 (train 80% / testing 10% / validation 10%)",
+        "70-15-15 (train 70% / testing 15% / validation 15%)",
+    ]
+    if allow_both:
+        options.append("both (jalankan 80-10-10 DAN 70-15-15, folder terpisah)")
+
+    selected = ask_choice("Pilih preset split dataset", options, default_index=0)
+    token = selected.split(" ", 1)[0].strip()
+    if token == "config":
+        return "config"
+    return token
+
+
+def ask_optimizer() -> str:
+    options = [
+        "adam (adaptif, rekomendasi umum)",
+        "no_optimize (SGD plain, baseline pembanding)",
+    ]
+    selected = ask_choice("Pilih optimizer training", options, default_index=0)
+    return selected.split(" ", 1)[0].strip()
+
+
 def ask_on_existing_split_mode() -> str:
     options = [
         "ask (tanya jika folder split sudah ada)",
@@ -276,6 +305,8 @@ def build_train_command(
     mixed_precision: bool = False,
     disable_cpu_fallback: bool = False,
     shutdown_on_finish: bool = False,
+    split_presets: Optional[str] = None,
+    optimizer: Optional[str] = None,
 ) -> List[str]:
     train_script = _resolve_script("train.py")
     command = [str(get_runtime_python()), str(train_script), "--dataset", dataset_id, "--models", models]
@@ -295,6 +326,10 @@ def build_train_command(
     if split_first:
         command.append("--split-first")
         command.extend(["--on-existing-split", on_existing_split])
+    if split_presets:
+        command.extend(["--split-presets", split_presets])
+    if optimizer:
+        command.extend(["--optimizer", optimizer])
     if augment_info:
         command.append("--augment-info")
     command.extend(["--on-existing", on_existing])
@@ -320,7 +355,11 @@ def run_check_dataset(dataset_id: str) -> int:
     return run_command(command)
 
 
-def run_split_dataset(dataset_id: str, on_existing_split: str = "ask") -> int:
+def run_split_dataset(
+    dataset_id: str,
+    on_existing_split: str = "ask",
+    split_presets: Optional[str] = None,
+) -> int:
     script = _resolve_script("2.split_data_testing.py")
     command = [
         str(get_runtime_python()),
@@ -330,6 +369,8 @@ def run_split_dataset(dataset_id: str, on_existing_split: str = "ask") -> int:
         "--on-existing-split",
         on_existing_split,
     ]
+    if split_presets:
+        command.extend(["--split-presets", split_presets])
     return run_command(command)
 
 
@@ -401,9 +442,14 @@ def main() -> None:
             for dataset_id in target_datasets:
                 run_check_dataset(dataset_id)
         elif choice == "3":
+            split_presets = ask_split_preset_selection(allow_both=True)
             on_existing_split_mode = ask_on_existing_split_mode()
             for dataset_id in target_datasets:
-                run_split_dataset(dataset_id, on_existing_split=on_existing_split_mode)
+                run_split_dataset(
+                    dataset_id,
+                    on_existing_split=on_existing_split_mode,
+                    split_presets=split_presets,
+                )
         elif choice == "4":
             for dataset_id in target_datasets:
                 dataset_cfg = dataset_registry.get(dataset_id)
@@ -411,6 +457,8 @@ def main() -> None:
         elif choice == "5":
             selected_model = ask_choice("Pilih model", model_ids)
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
+            split_presets = ask_split_preset_selection(allow_both=True)
+            selected_optimizer = ask_optimizer()
             on_existing_mode = ask_on_existing_mode()
             method_overrides = ask_method_runtime_overrides([selected_method])
             runtime_toggles = ask_runtime_toggles()
@@ -428,10 +476,14 @@ def main() -> None:
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
                 shutdown_on_finish=ask_shutdown_on_finish(),
+                split_presets=split_presets,
+                optimizer=selected_optimizer,
             )
             run_command(command)
         elif choice == "6":
             selected_method = ask_choice("Pilih method", method_ids, default_index=method_ids.index(method_registry.default_method))
+            split_presets = ask_split_preset_selection(allow_both=True)
+            selected_optimizer = ask_optimizer()
             on_existing_mode = ask_on_existing_mode()
             method_overrides = ask_method_runtime_overrides([selected_method])
             runtime_toggles = ask_runtime_toggles()
@@ -449,9 +501,13 @@ def main() -> None:
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
                 shutdown_on_finish=ask_shutdown_on_finish(),
+                split_presets=split_presets,
+                optimizer=selected_optimizer,
             )
             run_command(command)
         elif choice == "7":
+            split_presets = ask_split_preset_selection(allow_both=True)
+            selected_optimizer = ask_optimizer()
             on_existing_mode = ask_on_existing_mode()
             method_overrides = ask_method_runtime_overrides(method_ids)
             runtime_toggles = ask_runtime_toggles()
@@ -469,6 +525,8 @@ def main() -> None:
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
                 shutdown_on_finish=ask_shutdown_on_finish(),
+                split_presets=split_presets,
+                optimizer=selected_optimizer,
             )
             run_command(command)
         elif choice == "8":
@@ -484,6 +542,8 @@ def main() -> None:
                 )
                 selected_method_ids = [method_id]
 
+            split_presets = ask_split_preset_selection(allow_both=True)
+            selected_optimizer = ask_optimizer()
             on_existing_split_mode = ask_on_existing_split_mode()
             on_existing_mode = ask_on_existing_mode()
             method_overrides = ask_method_runtime_overrides(selected_method_ids)
@@ -503,6 +563,8 @@ def main() -> None:
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
                 shutdown_on_finish=ask_shutdown_on_finish(),
+                split_presets=split_presets,
+                optimizer=selected_optimizer,
             )
             run_command(command)
         elif choice == "9":
@@ -535,6 +597,8 @@ def main() -> None:
             )
             selected_method_ids = _parse_csv_selection(methods_arg, method_ids)
             method_overrides = ask_method_runtime_overrides(selected_method_ids)
+            split_presets = ask_split_preset_selection(allow_both=True)
+            selected_optimizer = ask_optimizer()
             on_existing_mode = ask_on_existing_mode()
             split_first = ask_yes_no("Jalankan split dataset dulu?", False)
             on_existing_split_mode = "ask"
@@ -559,6 +623,8 @@ def main() -> None:
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
                 shutdown_on_finish=ask_shutdown_on_finish(),
+                split_presets=split_presets,
+                optimizer=selected_optimizer,
             )
             run_command(command)
         elif choice in {"11", "12"}:
@@ -579,6 +645,8 @@ def main() -> None:
                 )
                 selected_method_ids = [method_id]
 
+            split_presets = ask_split_preset_selection(allow_both=True)
+            selected_optimizer = ask_optimizer()
             on_existing_split_mode = ask_on_existing_split_mode()
             on_existing_mode = ask_on_existing_mode()
             method_overrides = ask_method_runtime_overrides(selected_method_ids)
@@ -600,6 +668,8 @@ def main() -> None:
                 mixed_precision=runtime_toggles["mixed_precision"],
                 disable_cpu_fallback=runtime_toggles["disable_cpu_fallback"],
                 shutdown_on_finish=ask_shutdown_on_finish(),
+                split_presets=split_presets,
+                optimizer=selected_optimizer,
             )
             run_command(command)
         else:

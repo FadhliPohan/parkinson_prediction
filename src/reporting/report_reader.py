@@ -74,6 +74,9 @@ def _build_record_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> Dict
     dataset_name = str(dataset.get("dataset_name", "unknown_dataset"))
     model_name = str(model.get("model_name", run_dir.parent.name))
     method_id = str(training.get("method", "unknown_method"))
+    split_preset = str(dataset.get("split_preset") or "unknown")
+    split_ratio = dataset.get("split_ratio") if isinstance(dataset, dict) else None
+    optimizer_name = str(params.get("optimizer") or "unknown")
 
     augmentation_id = _fallback_augmentation_id(manifest)
     augmentation_label = str(training.get("augmentation_label", "")).strip() or _fallback_augmentation_label(augmentation_id)
@@ -83,6 +86,9 @@ def _build_record_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> Dict
     return {
         "experiment_id": str(manifest.get("experiment_id") or training.get("experiment_id") or ""),
         "dataset": dataset_name,
+        "split_preset": split_preset,
+        "split_ratio": split_ratio,
+        "optimizer": optimizer_name,
         "augmentation": augmentation_id,
         "augmentation_label": augmentation_label,
         "method": method_id,
@@ -244,8 +250,9 @@ def build_latest_summary_table(report_root: Path) -> List[Dict[str, object]]:
     latest_by_key: Dict[str, Dict[str, Any]] = {}
 
     for record in records:
-        key = "{}|{}|{}|{}".format(
+        key = "{}|{}|{}|{}|{}".format(
             record.get("dataset"),
+            record.get("split_preset"),
             record.get("augmentation"),
             record.get("method"),
             record.get("model"),
@@ -265,6 +272,7 @@ def build_latest_summary_table(report_root: Path) -> List[Dict[str, object]]:
         rows.append(
             {
                 "dataset": record.get("dataset"),
+                "split_preset": record.get("split_preset"),
                 "augmentation": record.get("augmentation"),
                 "method": record.get("method"),
                 "model": record.get("model"),

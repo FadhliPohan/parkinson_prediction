@@ -203,6 +203,28 @@ def ensure_split_structure(dataset_dir: Path) -> None:
         raise FileNotFoundError("Folder split tidak lengkap: {}".format(", ".join(missing)))
 
 
+def load_split_metadata(dataset_dir: Path) -> Dict[str, object]:
+    """Baca metadata preset/rasio split dari split_manifest.json (jika ada).
+
+    Dipakai untuk mencatat preset split (mis. 80-10-10) ke run_manifest sehingga
+    setiap run jelas memakai split yang mana dan bisa dibandingkan di report.
+    """
+    manifest_path = dataset_dir / "_metadata" / "split_manifest.json"
+    if not manifest_path.exists():
+        return {"split_preset": "unknown", "split_ratio": None}
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except Exception:
+        return {"split_preset": "unknown", "split_ratio": None}
+    if not isinstance(payload, dict):
+        return {"split_preset": "unknown", "split_ratio": None}
+    return {
+        "split_preset": str(payload.get("split_preset") or "unknown"),
+        "split_ratio": payload.get("split_ratio"),
+    }
+
+
 def get_class_names(dataset_dir: Path) -> List[str]:
     train_dir = dataset_dir / "train"
     class_names = sorted([p.name for p in train_dir.iterdir() if p.is_dir()])
@@ -626,6 +648,20 @@ def run_training_pipeline(
     dataset_dir = (PROJECT_ROOT / args.dataset_dir).resolve()
     ensure_split_structure(dataset_dir)
 
+    split_metadata = load_split_metadata(dataset_dir)
+    print("\n=== Split Dataset Dipakai ===")
+    print("Folder split :", dataset_dir)
+    print("Preset split :", split_metadata.get("split_preset"))
+    split_ratio_info = split_metadata.get("split_ratio")
+    if isinstance(split_ratio_info, dict):
+        print(
+            "Rasio split  : train={} | testing={} | validation={}".format(
+                split_ratio_info.get("train"),
+                split_ratio_info.get("testing"),
+                split_ratio_info.get("validation"),
+            )
+        )
+
     class_names = get_class_names(dataset_dir)
     class_to_index = dict((name, idx) for idx, name in enumerate(class_names))
     num_classes = len(class_names)
@@ -1034,6 +1070,8 @@ def run_training_pipeline(
         "dataset": {
             "dataset_name": dataset_name,
             "dataset_dir": str(dataset_dir),
+            "split_preset": split_metadata.get("split_preset"),
+            "split_ratio": split_metadata.get("split_ratio"),
             "class_names": class_names,
             "class_count": int(num_classes),
             "split_counts": split_counts,

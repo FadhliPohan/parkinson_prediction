@@ -80,10 +80,17 @@ Aktivitas:
 
 ### Pipeline 3 - Split dataset
 Aktivitas:
-1. Memanggil `training/2.split_data_testing.py`.
-2. Menjalankan balancing kelas minoritas bila perlu.
-3. Split data ke train/testing/validation.
-4. Menulis manifest split.
+1. Memilih **preset split**: `config` (rasio default), `80-10-10`, `70-15-15`, atau `both` (keduanya).
+2. Memanggil `training/2.split_data_testing.py` (arg `--split-presets`).
+3. Menjalankan balancing kelas minoritas bila perlu.
+4. Split data ke train/testing/validation.
+5. Menulis manifest split (termasuk field `split_preset`).
+
+Folder output per preset (tidak saling menimpa):
+- `config`   → `dataset/split/<id>`
+- `80-10-10` → `dataset/split/<id>__80-10-10`
+- `70-15-15` → `dataset/split/<id>__70-15-15`
+- `both`     → membuat kedua folder bersuffix sekaligus.
 
 ### Pipeline 4 - Info kebijakan augmentasi train
 Aktivitas:
@@ -96,13 +103,19 @@ Aktivitas:
 1. Pilih dataset.
 2. Pilih model.
 3. Pilih method.
-4. Pilih preprocessing mode (`augment`, `no_augment`, `both`).
-5. Isi konfigurasi runtime method di awal:
+4. Pilih **preset split** (`config`/`80-10-10`/`70-15-15`/`both`) → menentukan folder split yang dipakai.
+5. Pilih **optimizer** (`adam`/`no_optimize`).
+6. Pilih preprocessing mode (`augment`, `no_augment`, `both`).
+7. Isi konfigurasi runtime method di awal:
    - `epoch stage-1`,
    - `batch size`,
    - `fine-tune epochs`.
-6. Konfigurasi runtime method direkam ke report run (`run_manifest`) dan ringkasan workflow.
-7. `main.py` membangun command ke `training/train.py`.
+8. Konfigurasi runtime method + preset split direkam ke report run (`run_manifest`) dan ringkasan workflow.
+9. `main.py` membangun command ke `training/train.py` (mengirim `--split-presets` & `--optimizer`).
+
+Catatan visibilitas: saat training, terminal mencetak preset split aktif + folder, dan baris
+`[RUN]` menyertakan `split=<preset>`. Bila preset `both`, training berjalan untuk kedua preset
+dan hasilnya terlacak terpisah di report (kolom `split_preset`).
 
 Output:
 1. Report per kombinasi di `report/<dataset>/<augmentasi>/<method>/<model>/<run_id>/`.

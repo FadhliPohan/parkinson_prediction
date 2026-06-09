@@ -2,7 +2,7 @@
 
 > Dibuat: 2026-06-03 | Diperbarui: 2026-06-04 (audit pra-deploy menyeluruh: code, alur, arsitektur)
 > Reviewer: Claude (AI Code Expert — Python, Machine Learning, Computer Vision)
-> Status: **3 deployment-blocker BARU ditemukan** + 2 isu lama masih terbuka. **Belum aman untuk deploy.**
+> Status: **BLOCKER-01 & BLOCKER-02 sudah diperbaiki (kode), BLOCKER-03 tidak berlaku.** Sisa sebelum deploy: re-split + latih ulang, DEP-01, ISU-07. **Belum aman untuk deploy sampai re-split + retrain selesai.**
 
 ---
 
@@ -240,19 +240,21 @@ Urutan ini mengoptimalkan "hasil maksimal sebelum deploy" — dahulukan yang mem
 | # | Item | Effort | Dampak | Kenapa urutan ini |
 |---|---|---|---|---|
 | ✅ | ~~**BLOCKER-01** — hapus double preprocessing di inference~~ | **Rendah** | **Sangat Tinggi** | **SUDAH DIPERBAIKI 2026-06-04.** Tinggal verifikasi prob train==inference & latih/evaluasi ulang. |
-| **2** | **BLOCKER-02** — split dulu, balancing rotasi hanya di train | Sedang | **Sangat Tinggi** | Tanpa ini, semua metrik tidak bisa dipercaya. Wajib re-split + latih ulang setelahnya. |
+| ✅/⏳ | **BLOCKER-02** — split dulu, balancing rotasi hanya di train | Sedang | **Sangat Tinggi** | **KODE SUDAH DIPERBAIKI 2026-06-04 & teruji.** ⏳ Sisa aksi: re-split `dataset_merder` + latih ulang (metrik lama dibuang). |
 | ✅ | ~~**BLOCKER-03** — konfirmasi/implementasi split per-pasien~~ | Rendah | Tinggi | **TIDAK BERLAKU** (dikonfirmasi: tiap gambar independen). |
 | **4** | **DEP-01** — uji install di server bersih + pin `torch` | Rendah | Tinggi | Mencegah gagal deploy / konflik CUDA. |
 | **5** | **ISU-07** — Opsi C (nonaktifkan transformer) sekarang; Opsi A nanti | Rendah (C) / Tinggi (A) | Sedang | Cepat menutup hasil menyesatkan tanpa ubah kode. |
 | **6** | **MINOR-01..06 + ARCH-01..06 + CATATAN-A** | Rendah | Rendah | Kebersihan & maintainability; aman dikerjakan setelah deploy. |
 | **7** | **REC-06** — cosine annealing TF | Sedang | Rendah | Peningkatan marjinal; opsional. |
 
-**Langkah cepat hari ini (tanpa risiko besar):**
-1. Perbaiki BLOCKER-01 (hapus 3 baris preprocessing di [predictor.py:35-37](src/inference/predictor.py#L35-L37)) — lalu uji 1 gambar train↔inference harus identik.
-2. Set `enabled: false` untuk vit/swintransformer/deit di [configs/models.yaml](configs/models.yaml) (ISU-07 Opsi C).
-3. Pin `torch` di [requirements.txt](requirements.txt) dan uji `pip install` di env bersih.
+**Sudah selesai (kode):** BLOCKER-01 ✅, BLOCKER-02 ✅, BLOCKER-03 ✅ (tidak berlaku).
 
-Setelah itu baru kerjakan BLOCKER-02 (perlu re-split + retrain — makan waktu) sebagai gerbang terakhir sebelum benar-benar deploy.
+**Sisa pekerjaan sebelum deploy (berurutan):**
+1. **DEP-01** — pin `torch` di [requirements.txt](requirements.txt) + uji `pip install` di env server bersih.
+2. **ISU-07** — set `enabled: false` untuk vit/swintransformer/deit di [configs/models.yaml](configs/models.yaml) (Opsi C cepat), atau implementasi pretrained (Opsi A).
+3. **DATA-01/02** (ditunda atas permintaan user) — samakan `datasets.yaml` dgn folder nyata + hapus split lama yang bocor.
+4. **Re-split `dataset_merder` + latih ulang semua model** — gerbang terakhir; metrik lama (dari split bocor) dibuang.
+5. **Verifikasi & uji end-to-end** — prob train==inference (BLOCKER-01), path `model_dir` valid di server (ARCH-06), uji upload gambar di web app.
 
 ---
 
@@ -283,8 +285,8 @@ Setelah itu baru kerjakan BLOCKER-02 (perlu re-split + retrain — makan waktu) 
 
 ## 10. Kesimpulan
 
-Training loop sudah solid dan 9 perbaikan awal terkonfirmasi benar. Namun **project belum aman untuk deploy** karena audit end-to-end menemukan tiga isu yang sebelumnya luput — dan dua di antaranya (double preprocessing & data leakage) membuat sistem **terlihat benar padahal salah**, tanpa error apa pun.
+Audit end-to-end menemukan tiga isu yang sebelumnya luput; dua di antaranya (double preprocessing & data leakage) membuat sistem **terlihat benar padahal salah**, tanpa error apa pun. **Ketiga blocker tersebut kini sudah ditangani:** BLOCKER-01 (kode diperbaiki & teruji), BLOCKER-02 (splitter ditulis ulang & teruji), BLOCKER-03 (dikonfirmasi tidak berlaku — tiap gambar independen).
 
-Prioritas sebelum deploy, berurutan: **(1) BLOCKER-01 double preprocessing** → **(2) BLOCKER-02 leakage augmentasi** → **(3) BLOCKER-03 split per-pasien** → **(4) DEP-01 dependency** → baru hal-hal lain. ISU-07 (transformer), yang sebelumnya dianggap "kritis", sebenarnya berdampak lebih rendah terhadap deployment dan cukup ditutup sementara dengan Opsi C.
+**Yang masih harus dilakukan sebelum deploy:** (1) **re-split `dataset_merder` + latih ulang** semua model — wajib, karena metrik lama berasal dari split yang bocor; (2) **DEP-01** — pin `torch` & uji install di server; (3) **ISU-07** — nonaktifkan/ganti transformer; (4) verifikasi prob train==inference + uji end-to-end web app. Item kebersihan (MINOR/ARCH/DATA-01/02) aman dikerjakan setelahnya.
 
-Tindakan paling berdampak & termurah yang bisa dilakukan **sekarang**: hapus pemanggilan ganda `preprocess_fn` di [predictor.py:35-37](src/inference/predictor.py#L35-L37) (BLOCKER-01). Itu satu perubahan kecil yang langsung memulihkan kebenaran prediksi aplikasi yang akan Anda deploy.
+**Kesimpulan status:** perbaikan kode untuk semua blocker kritis **selesai**. Gerbang terakhir adalah **re-split + latih ulang** agar metrik yang dilaporkan benar-benar jujur, lalu DEP-01 untuk memastikan instalasi di server.

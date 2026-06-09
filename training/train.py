@@ -15,11 +15,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from dataclasses import replace as dataclass_replace
+
 from src.datasets.registry import DatasetConfig, DatasetRegistry
 from src.datasets.splitter import (
     SPLIT_PRESETS,
+    normalize_preset,
+    resolve_preset_list,
     resolve_split_cfg,
     split_dataset,
+    split_dir_for_preset,
     validate_balanced_split_manifest,
 )
 from src.datasets.transforms import print_augmentation_summary
@@ -48,10 +53,12 @@ def _build_experiment_id(
     augmentation_id: str,
     method_id: str,
     model_id: str,
+    split_preset: str = "",
 ) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    return "exp_{}_{}_{}_{}_{}".format(
+    return "exp_{}_{}_{}_{}_{}_{}".format(
         _sanitize_token(dataset_id),
+        _sanitize_token(split_preset or "config-default"),
         _sanitize_token(augmentation_id),
         _sanitize_token(method_id),
         _sanitize_token(model_id),
@@ -491,6 +498,7 @@ def _find_existing_runs(
     augmentation_id: str,
     method_id: str,
     model_id: str,
+    split_preset: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     return [
         record
@@ -499,6 +507,7 @@ def _find_existing_runs(
         and record.get("augmentation") == augmentation_id
         and record.get("method") == method_id
         and record.get("model") == model_id
+        and (split_preset is None or str(record.get("split_preset") or "") == str(split_preset))
     ]
 
 
@@ -510,6 +519,7 @@ def _estimate_target_combo_counts(
     method_ids: List[str],
     model_cfgs: List[ModelConfig],
     report_index: List[Dict[str, Any]],
+    preset_list: List[Optional[str]],
 ) -> Tuple[int, int]:
     total_combos = 0
     existing_combos = 0
@@ -520,19 +530,22 @@ def _estimate_target_combo_counts(
         if not dataset_augmentations:
             continue
 
-        for augmentation_cfg in dataset_augmentations:
-            for method_id in method_ids:
-                for model_cfg in model_cfgs:
-                    total_combos += 1
-                    existing_runs = _find_existing_runs(
-                        report_index=report_index,
-                        dataset_id=dataset_cfg.dataset_id,
-                        augmentation_id=augmentation_cfg.augmentation_id,
-                        method_id=method_id,
-                        model_id=model_cfg.model_id,
-                    )
-                    if existing_runs:
-                        existing_combos += 1
+        for _preset in preset_list:
+            preset_label = normalize_preset(_preset) or "config-default"
+            for augmentation_cfg in dataset_augmentations:
+                for method_id in method_ids:
+                    for model_cfg in model_cfgs:
+                        total_combos += 1
+                        existing_runs = _find_existing_runs(
+                            report_index=report_index,
+                            dataset_id=dataset_cfg.dataset_id,
+                            augmentation_id=augmentation_cfg.augmentation_id,
+                            method_id=method_id,
+                            model_id=model_cfg.model_id,
+                            split_preset=preset_label,
+                        )
+                        if existing_runs:
+                            existing_combos += 1
 
     return total_combos, existing_combos
 
@@ -649,6 +662,7 @@ def generate_report(results: List[Dict[str, Any]]) -> Optional[Path]:
     header = [
         "experiment_id",
         "dataset",
+        "split_preset",
         "augmentation",
         "method",
         "model",
@@ -727,7 +741,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         choices=sorted(SPLIT_PRESETS.keys()),
-        help="Preset rasio split dinamis saat --split-first (mis. 80-10-10, 70-15-15).",
+        help="Preset rasio split tunggal saat --split-first (mis. 80-10-10, 70-15-15).",
+    )
+    parser.add_argument(
+        "--split-presets",
+        type=str,
+        default=None,
+        help=(
+            "Preset split yang dipakai (boleh banyak): 'both' (80-10-10 & 70-15-15), "
+            "'config' (rasio default config), satu preset, atau daftar dipisah koma. "
+            "Setiap preset memakai folder split terpisah dan dicatat di report."
+        ),
     )
     parser.add_argument("--train-ratio", type=float, default=None, help="Override rasio train (0-1) saat --split-first.")
     parser.add_argument("--test-ratio", type=float, default=None, help="Override rasio testing (0-1) saat --split-first.")
@@ -805,6 +829,19 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_preset_list(args: argparse.Namespace) -> List[Optional[str]]:
+    """Tentukan daftar preset split yang dipakai sepanjang workflow.
+
+    Prioritas: --split-presets (multi/both) > --split-preset (tunggal) >
+    rasio manual / config (None = config-default).
+    """
+    if args.split_presets is not None and str(args.split_presets).strip():
+        return resolve_preset_list(args.split_presets)
+    if args.split_preset:
+        return [normalize_preset(args.split_preset)]
+    return [None]
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -826,14 +863,18 @@ def main() -> None:
 
     user_overrides = _collect_user_overrides(args)
     method_runtime_overrides = _parse_method_overrides_json(args.method_overrides_json, method_ids)
+    preset_list = _resolve_preset_list(args)
+    preset_labels = [normalize_preset(p) or "config-default" for p in preset_list]
 
     print("\n=== Rencana Eksekusi Kombinasi ===")
-    print("Dataset    :", ", ".join(dataset_ids))
-    print("Augmentasi :", ", ".join(selected_augmentation_ids))
-    print("Method     :", ", ".join(method_ids))
+    print("Dataset      :", ", ".join(dataset_ids))
+    print("Split preset :", ", ".join(preset_labels))
+    print("Augmentasi   :", ", ".join(selected_augmentation_ids))
+    print("Method       :", ", ".join(method_ids))
     if selected_families:
-        print("Family     :", ", ".join(selected_families))
-    print("Model      :", ", ".join([m.model_id for m in model_cfgs]))
+        print("Family       :", ", ".join(selected_families))
+    print("Model        :", ", ".join([m.model_id for m in model_cfgs]))
+    print("Optimizer    :", str(getattr(args, "optimizer", None) or "default (config)"))
     if method_runtime_overrides:
         print("Override per method:", json.dumps(method_runtime_overrides, ensure_ascii=False))
 
@@ -853,6 +894,7 @@ def main() -> None:
         method_ids=method_ids,
         model_cfgs=model_cfgs,
         report_index=report_index,
+        preset_list=preset_list,
     )
     effective_on_existing = _resolve_on_existing_once(
         requested_mode=args.on_existing,
@@ -889,218 +931,246 @@ def main() -> None:
                 extensions=dataset_cfg.valid_extensions,
             )
 
-        if args.split_first:
-            should_resplit = _should_run_split(dataset_cfg=dataset_cfg, on_existing_split=args.on_existing_split)
-            if should_resplit:
-                print("\n=== Split Dataset ===")
-                active_split_cfg = resolve_split_cfg(
-                    preset=args.split_preset,
-                    train=args.train_ratio,
-                    testing=args.test_ratio,
-                    validation=args.val_ratio,
-                    fallback=dataset_cfg.split,
-                )
-                print(
-                    "Rasio split: train={train:.2f} | testing={testing:.2f} | validation={validation:.2f}".format(
-                        **active_split_cfg
-                    )
-                )
-                split_manifest = split_dataset(
-                    original_dir=dataset_cfg.original_path,
-                    split_dir=dataset_cfg.split_path,
-                    class_mode=dataset_cfg.class_mode,
-                    extensions=dataset_cfg.valid_extensions,
-                    split_cfg=active_split_cfg,
-                    resize_cfg=dataset_cfg.resize,
-                    seed=int(user_overrides.get("seed", dataset_cfg.seed)),
-                )
-                source_label = "baru"
-            else:
-                print("\n=== Gunakan Split Existing ===")
-                if not _split_dir_has_required_structure(dataset_cfg.split_path, dataset_cfg.valid_extensions):
-                    raise RuntimeError(
-                        "Folder split existing tidak valid/kurang lengkap. "
-                        "Jalankan split ulang (`--on-existing-split resplit`)."
-                    )
-                split_manifest = _load_split_manifest(dataset_cfg.split_path)
-                if split_manifest is None:
-                    raise RuntimeError(
-                        "split_manifest.json tidak ditemukan pada split existing. "
-                        "Jalankan split ulang (`--on-existing-split resplit`)."
-                    )
-                source_label = "existing"
+        for preset in preset_list:
+            active_preset_label = normalize_preset(preset) or "config-default"
+            resolved_split_dir = split_dir_for_preset(dataset_cfg.split_path, preset)
+            dataset_cfg_active = dataclass_replace(dataset_cfg, split_dir=str(resolved_split_dir))
 
-            print("Split manifest:", dataset_cfg.split_path / "_metadata" / "split_manifest.json")
-            split_stats = split_manifest.get("split_stats", {})
-            for split_name in ["train", "testing", "validation"]:
-                total = sum(int(v) for v in split_stats.get(split_name, {}).values())
-                print(f"- {split_name:10s}: {total} gambar")
-            balancing_info = split_manifest.get("class_balancing", {})
-            if balancing_info.get("applied"):
-                print("Balancing  : aktif, total augmentasi =", balancing_info.get("total_generated", 0))
-            else:
-                print("Balancing  : tidak perlu (kelas sudah seimbang)")
-            _assert_split_balance(split_manifest=split_manifest, source_label=source_label)
-        else:
-            if not _split_dir_has_required_structure(dataset_cfg.split_path, dataset_cfg.valid_extensions):
-                raise RuntimeError(
-                    "Folder split dataset tidak valid/kurang lengkap. "
-                    "Gunakan `--split-first` untuk membuat split yang siap training."
-                )
-            existing_manifest = _load_split_manifest(dataset_cfg.split_path)
-            if existing_manifest is not None:
-                _assert_split_balance(split_manifest=existing_manifest, source_label="existing")
-            else:
-                print(
-                    "[INFO] split_manifest.json belum tersedia. "
-                    "Validasi balance split dilewati. "
-                    "Gunakan `--split-first` agar split tervalidasi otomatis."
-                )
+            print("\n" + "-" * 72)
+            print("Preset split aktif :", active_preset_label)
+            print("Folder split       :", dataset_cfg_active.split_path)
+            print("-" * 72)
 
-        if args.augment_info:
-            rc = _run_augment_info(dataset_cfg.split_path)
-            if rc != 0:
-                raise SystemExit(rc)
-
-        for augmentation_cfg in dataset_augmentations:
-            print(
-                "\n=== Skenario Augmentasi: {} ({}) ===".format(
-                    augmentation_cfg.augmentation_id,
-                    augmentation_cfg.label,
+            if args.split_first:
+                should_resplit = _should_run_split(
+                    dataset_cfg=dataset_cfg_active, on_existing_split=args.on_existing_split
                 )
-            )
-            for method_id in method_ids:
-                scoped_overrides = dict(user_overrides)
-                scoped_overrides.update(method_runtime_overrides.get(method_id, {}))
-                method_cfg, base_training_params = select_training_method(
-                    method_registry=method_registry,
-                    method_id=method_id,
-                    user_overrides=scoped_overrides,
-                )
-                training_params = apply_augmentation(base_training_params, augmentation_cfg)
-
-                print("\n--- Method: {} ---".format(method_id))
-                print("Deskripsi:", method_cfg.description)
-                print(
-                    "Runtime config -> epochs={}, batch_size={}, fine_tune_epochs={}".format(
-                        training_params.get("epochs"),
-                        training_params.get("batch_size"),
-                        training_params.get("fine_tune_epochs"),
-                    )
-                )
-
-                for model_cfg in model_cfgs:
-                    existing_runs = _find_existing_runs(
-                        report_index=report_index,
-                        dataset_id=dataset_cfg.dataset_id,
-                        augmentation_id=augmentation_cfg.augmentation_id,
-                        method_id=method_id,
-                        model_id=model_cfg.model_id,
-                    )
-                    should_run = _should_run_combo(
-                        on_existing=effective_on_existing,
-                        existing_runs=existing_runs,
-                        dataset_id=dataset_cfg.dataset_id,
-                        augmentation_id=augmentation_cfg.augmentation_id,
-                        method_id=method_id,
-                        model_id=model_cfg.model_id,
-                    )
-                    if not should_run:
-                        latest_existing = existing_runs[0] if existing_runs else {}
-                        save_result(
-                            workflow_results,
-                            {
-                                "experiment_id": latest_existing.get("experiment_id"),
-                                "dataset": dataset_cfg.dataset_id,
-                                "augmentation": augmentation_cfg.augmentation_id,
-                                "method": method_id,
-                                "model": model_cfg.model_id,
-                                "status": "skipped_existing",
-                                "run_id": latest_existing.get("run_id"),
-                                "epochs": latest_existing.get("epochs"),
-                                "batch_size": latest_existing.get("batch_size"),
-                                "fine_tune_epochs": latest_existing.get("fine_tune_epochs"),
-                                "train_accuracy": latest_existing.get("train_accuracy"),
-                                "val_accuracy": latest_existing.get("val_accuracy"),
-                                "train_loss": latest_existing.get("train_loss"),
-                                "val_loss": latest_existing.get("val_loss"),
-                                "test_accuracy": latest_existing.get("accuracy"),
-                                "test_f1_score": latest_existing.get("f1_score"),
-                                "training_time_seconds": latest_existing.get("training_time_seconds"),
-                                "model_path": latest_existing.get("final_model_path"),
-                                "report_path": latest_existing.get("run_dir"),
-                            },
-                        )
-                        continue
-
-                    experiment_id = _build_experiment_id(
-                        dataset_id=dataset_cfg.dataset_id,
-                        augmentation_id=augmentation_cfg.augmentation_id,
-                        method_id=method_id,
-                        model_id=model_cfg.model_id,
+                if should_resplit:
+                    print("\n=== Split Dataset (preset: {}) ===".format(active_preset_label))
+                    active_split_cfg = resolve_split_cfg(
+                        preset=preset,
+                        train=args.train_ratio if preset is None else None,
+                        testing=args.test_ratio if preset is None else None,
+                        validation=args.val_ratio if preset is None else None,
+                        fallback=dataset_cfg.split,
                     )
                     print(
-                        "\n[RUN] dataset={} | augmentasi={} | method={} | model={} | experiment_id={}".format(
-                            dataset_cfg.dataset_id,
-                            augmentation_cfg.augmentation_id,
-                            method_id,
-                            model_cfg.model_id,
-                            experiment_id,
+                        "Rasio split: train={train:.2f} | testing={testing:.2f} | validation={validation:.2f}".format(
+                            **active_split_cfg
                         )
                     )
-                    rc = train_model(
-                        model_cfg=model_cfg,
-                        dataset_cfg=dataset_cfg,
-                        method_id=method_id,
-                        augmentation_cfg=augmentation_cfg,
-                        training_params=training_params,
-                        experiment_id=experiment_id,
+                    split_manifest = split_dataset(
+                        original_dir=dataset_cfg.original_path,
+                        split_dir=dataset_cfg_active.split_path,
+                        class_mode=dataset_cfg.class_mode,
+                        extensions=dataset_cfg.valid_extensions,
+                        split_cfg=active_split_cfg,
+                        resize_cfg=dataset_cfg.resize,
+                        seed=int(user_overrides.get("seed", dataset_cfg.seed)),
+                        split_preset=preset,
                     )
-
-                    eval_result = evaluate_model(
-                        dataset_id=dataset_cfg.dataset_id,
-                        augmentation_id=augmentation_cfg.augmentation_id,
-                        method_id=method_id,
-                        model_id=model_cfg.model_id,
-                        expected_experiment_id=experiment_id,
-                    )
-                    metrics = eval_result.get("metrics", {}) if isinstance(eval_result, dict) else {}
-
-                    result_row = {
-                        "experiment_id": experiment_id,
-                        "dataset": dataset_cfg.dataset_id,
-                        "augmentation": augmentation_cfg.augmentation_id,
-                        "method": method_id,
-                        "model": model_cfg.model_id,
-                        "status": "success" if rc == 0 else "failed",
-                        "run_id": eval_result.get("run_id"),
-                        "epochs": training_params.get("epochs"),
-                        "batch_size": training_params.get("batch_size"),
-                        "fine_tune_epochs": training_params.get("fine_tune_epochs"),
-                        "train_accuracy": metrics.get("train_accuracy"),
-                        "val_accuracy": metrics.get("val_accuracy"),
-                        "train_loss": metrics.get("train_loss"),
-                        "val_loss": metrics.get("val_loss"),
-                        "test_accuracy": metrics.get("accuracy"),
-                        "test_f1_score": metrics.get("f1_score"),
-                        "training_time_seconds": eval_result.get("duration_seconds") or metrics.get("training_time_seconds"),
-                        "model_path": eval_result.get("final_model_path"),
-                        "report_path": eval_result.get("run_dir"),
-                    }
-                    save_result(workflow_results, result_row)
-                    report_index = build_experiment_index(REPORT_ROOT)
-
-                    if rc != 0:
-                        failed_id = "{}:{}:{}:{}".format(
-                            dataset_cfg.dataset_id,
-                            augmentation_cfg.augmentation_id,
-                            method_id,
-                            model_cfg.model_id,
+                    source_label = "baru"
+                else:
+                    print("\n=== Gunakan Split Existing (preset: {}) ===".format(active_preset_label))
+                    if not _split_dir_has_required_structure(dataset_cfg_active.split_path, dataset_cfg.valid_extensions):
+                        raise RuntimeError(
+                            "Folder split existing tidak valid/kurang lengkap. "
+                            "Jalankan split ulang (`--on-existing-split resplit`)."
                         )
-                        overall_failed.append(failed_id)
-                        print("[FAILED]", failed_id)
-                        if args.stop_on_error:
-                            break
+                    split_manifest = _load_split_manifest(dataset_cfg_active.split_path)
+                    if split_manifest is None:
+                        raise RuntimeError(
+                            "split_manifest.json tidak ditemukan pada split existing. "
+                            "Jalankan split ulang (`--on-existing-split resplit`)."
+                        )
+                    source_label = "existing"
+
+                print("Split manifest:", dataset_cfg_active.split_path / "_metadata" / "split_manifest.json")
+                split_stats = split_manifest.get("split_stats", {})
+                for split_name in ["train", "testing", "validation"]:
+                    total = sum(int(v) for v in split_stats.get(split_name, {}).values())
+                    print(f"- {split_name:10s}: {total} gambar")
+                balancing_info = split_manifest.get("class_balancing", {})
+                if balancing_info.get("applied"):
+                    print("Balancing  : aktif, total augmentasi =", balancing_info.get("total_generated", 0))
+                else:
+                    print("Balancing  : tidak perlu (kelas sudah seimbang)")
+                _assert_split_balance(split_manifest=split_manifest, source_label=source_label)
+                active_preset_label = str(split_manifest.get("split_preset") or active_preset_label)
+            else:
+                if not _split_dir_has_required_structure(dataset_cfg_active.split_path, dataset_cfg.valid_extensions):
+                    raise RuntimeError(
+                        "Folder split dataset (preset {}) tidak valid/kurang lengkap di {}. "
+                        "Gunakan `--split-first` (atau `--split-presets`) untuk membuat split yang siap training.".format(
+                            active_preset_label, dataset_cfg_active.split_path
+                        )
+                    )
+                existing_manifest = _load_split_manifest(dataset_cfg_active.split_path)
+                if existing_manifest is not None:
+                    _assert_split_balance(split_manifest=existing_manifest, source_label="existing")
+                    active_preset_label = str(existing_manifest.get("split_preset") or active_preset_label)
+                else:
+                    print(
+                        "[INFO] split_manifest.json belum tersedia. "
+                        "Validasi balance split dilewati. "
+                        "Gunakan `--split-first` agar split tervalidasi otomatis."
+                    )
+
+            if args.augment_info:
+                rc = _run_augment_info(dataset_cfg_active.split_path)
+                if rc != 0:
+                    raise SystemExit(rc)
+
+            for augmentation_cfg in dataset_augmentations:
+                print(
+                    "\n=== Skenario Augmentasi: {} ({}) | preset split: {} ===".format(
+                        augmentation_cfg.augmentation_id,
+                        augmentation_cfg.label,
+                        active_preset_label,
+                    )
+                )
+                for method_id in method_ids:
+                    scoped_overrides = dict(user_overrides)
+                    scoped_overrides.update(method_runtime_overrides.get(method_id, {}))
+                    method_cfg, base_training_params = select_training_method(
+                        method_registry=method_registry,
+                        method_id=method_id,
+                        user_overrides=scoped_overrides,
+                    )
+                    training_params = apply_augmentation(base_training_params, augmentation_cfg)
+
+                    print("\n--- Method: {} ---".format(method_id))
+                    print("Deskripsi:", method_cfg.description)
+                    print(
+                        "Runtime config -> epochs={}, batch_size={}, fine_tune_epochs={}, optimizer={}".format(
+                            training_params.get("epochs"),
+                            training_params.get("batch_size"),
+                            training_params.get("fine_tune_epochs"),
+                            training_params.get("optimizer"),
+                        )
+                    )
+
+                    for model_cfg in model_cfgs:
+                        existing_runs = _find_existing_runs(
+                            report_index=report_index,
+                            dataset_id=dataset_cfg.dataset_id,
+                            augmentation_id=augmentation_cfg.augmentation_id,
+                            method_id=method_id,
+                            model_id=model_cfg.model_id,
+                            split_preset=active_preset_label,
+                        )
+                        should_run = _should_run_combo(
+                            on_existing=effective_on_existing,
+                            existing_runs=existing_runs,
+                            dataset_id=dataset_cfg.dataset_id,
+                            augmentation_id=augmentation_cfg.augmentation_id,
+                            method_id=method_id,
+                            model_id=model_cfg.model_id,
+                        )
+                        if not should_run:
+                            latest_existing = existing_runs[0] if existing_runs else {}
+                            save_result(
+                                workflow_results,
+                                {
+                                    "experiment_id": latest_existing.get("experiment_id"),
+                                    "dataset": dataset_cfg.dataset_id,
+                                    "split_preset": active_preset_label,
+                                    "augmentation": augmentation_cfg.augmentation_id,
+                                    "method": method_id,
+                                    "model": model_cfg.model_id,
+                                    "status": "skipped_existing",
+                                    "run_id": latest_existing.get("run_id"),
+                                    "epochs": latest_existing.get("epochs"),
+                                    "batch_size": latest_existing.get("batch_size"),
+                                    "fine_tune_epochs": latest_existing.get("fine_tune_epochs"),
+                                    "train_accuracy": latest_existing.get("train_accuracy"),
+                                    "val_accuracy": latest_existing.get("val_accuracy"),
+                                    "train_loss": latest_existing.get("train_loss"),
+                                    "val_loss": latest_existing.get("val_loss"),
+                                    "test_accuracy": latest_existing.get("accuracy"),
+                                    "test_f1_score": latest_existing.get("f1_score"),
+                                    "training_time_seconds": latest_existing.get("training_time_seconds"),
+                                    "model_path": latest_existing.get("final_model_path"),
+                                    "report_path": latest_existing.get("run_dir"),
+                                },
+                            )
+                            continue
+
+                        experiment_id = _build_experiment_id(
+                            dataset_id=dataset_cfg.dataset_id,
+                            augmentation_id=augmentation_cfg.augmentation_id,
+                            method_id=method_id,
+                            model_id=model_cfg.model_id,
+                            split_preset=active_preset_label,
+                        )
+                        print(
+                            "\n[RUN] dataset={} | split={} | augmentasi={} | method={} | model={} | experiment_id={}".format(
+                                dataset_cfg.dataset_id,
+                                active_preset_label,
+                                augmentation_cfg.augmentation_id,
+                                method_id,
+                                model_cfg.model_id,
+                                experiment_id,
+                            )
+                        )
+                        rc = train_model(
+                            model_cfg=model_cfg,
+                            dataset_cfg=dataset_cfg_active,
+                            method_id=method_id,
+                            augmentation_cfg=augmentation_cfg,
+                            training_params=training_params,
+                            experiment_id=experiment_id,
+                        )
+
+                        eval_result = evaluate_model(
+                            dataset_id=dataset_cfg.dataset_id,
+                            augmentation_id=augmentation_cfg.augmentation_id,
+                            method_id=method_id,
+                            model_id=model_cfg.model_id,
+                            expected_experiment_id=experiment_id,
+                        )
+                        metrics = eval_result.get("metrics", {}) if isinstance(eval_result, dict) else {}
+
+                        result_row = {
+                            "experiment_id": experiment_id,
+                            "dataset": dataset_cfg.dataset_id,
+                            "split_preset": active_preset_label,
+                            "augmentation": augmentation_cfg.augmentation_id,
+                            "method": method_id,
+                            "model": model_cfg.model_id,
+                            "status": "success" if rc == 0 else "failed",
+                            "run_id": eval_result.get("run_id"),
+                            "epochs": training_params.get("epochs"),
+                            "batch_size": training_params.get("batch_size"),
+                            "fine_tune_epochs": training_params.get("fine_tune_epochs"),
+                            "train_accuracy": metrics.get("train_accuracy"),
+                            "val_accuracy": metrics.get("val_accuracy"),
+                            "train_loss": metrics.get("train_loss"),
+                            "val_loss": metrics.get("val_loss"),
+                            "test_accuracy": metrics.get("accuracy"),
+                            "test_f1_score": metrics.get("f1_score"),
+                            "training_time_seconds": eval_result.get("duration_seconds") or metrics.get("training_time_seconds"),
+                            "model_path": eval_result.get("final_model_path"),
+                            "report_path": eval_result.get("run_dir"),
+                        }
+                        save_result(workflow_results, result_row)
+                        report_index = build_experiment_index(REPORT_ROOT)
+
+                        if rc != 0:
+                            failed_id = "{}:{}:{}:{}:{}".format(
+                                dataset_cfg.dataset_id,
+                                active_preset_label,
+                                augmentation_cfg.augmentation_id,
+                                method_id,
+                                model_cfg.model_id,
+                            )
+                            overall_failed.append(failed_id)
+                            print("[FAILED]", failed_id)
+                            if args.stop_on_error:
+                                break
+
+                    if args.stop_on_error and overall_failed:
+                        break
 
                 if args.stop_on_error and overall_failed:
                     break

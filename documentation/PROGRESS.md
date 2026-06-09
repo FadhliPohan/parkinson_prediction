@@ -105,8 +105,24 @@
 - [x] Verifikasi build: VGG16 output (None,7,7,512) ✓ | ResNeXt50 output (None,7,7,2048) ✓
 - [x] Verifikasi registry: kedua model terbaca oleh `ModelRegistry` ✓
 
+## T7 — Preset split multi + visibilitas split + optimizer terminal + Streamlit non-blocking (2026-06-09)
+- [x] `splitter.py`: helper `normalize_preset`, `preset_label_for_ratios`, `split_dir_for_preset`,
+      `resolve_preset_list`; `split_dataset(split_preset=...)` + `split_manifest.json` simpan `split_preset` (schema 1.4.0)
+- [x] `training/2.split_data_testing.py`: arg `--split-presets` (both/config/list) → folder split terpisah per preset
+- [x] `training/train.py`: arg `--split-presets`, loop preset (folder via `dataclasses.replace`), cetak preset aktif per `[RUN]`,
+      `split_preset` masuk experiment_id + deteksi run existing + summary CSV
+- [x] `training_common.py`: baca `split_manifest.json` → cetak "Split Dataset Dipakai" + simpan `dataset.split_preset`/`split_ratio` di `run_manifest.json`
+- [x] `report_reader.py`: surface `split_preset` + `split_ratio`; key latest-summary menyertakan preset
+- [x] `main.py`: menu Split (no.3) & semua menu training (5/6/7/8/10/11/12) menanyakan **preset split** (incl. `both`) + **optimizer** (adam/no_optimize)
+- [x] `src/training/recommendations.py` (baru): default & clue hyperparameter per model/method
+- [x] `web/app.py`: training **non-blocking** (subprocess + file log + polling ~2s, tombol Hentikan/reset),
+      selectbox preset split (incl. `both`), auto-fill default + peringatan per model/method, kolom `split_preset` di report (ringkasan/ranking/download/overlay), preset selector di tab Dataset
+- [x] Dokumentasi: `fitur_baru.md` (section 6), `PROGRESS.md` (file ini)
+
 ## Verifikasi
 - [x] `py_compile` semua file yang diubah → OK
 - [x] Uji fungsi optimizer registry & resolusi/validasi split → OK
 - [x] Uji build backbone VGG16 + ResNeXt50 → OK (verified 2026-06-04)
+- [x] (2026-06-09) `py_compile` semua file diubah → OK; `train.py --help` memunculkan `--split-presets`/`--optimizer`;
+      helper preset & modul rekomendasi/clue diuji manual → OK
 - [ ] Uji training end-to-end nyata (butuh dataset + GPU/CPU; dijalankan user)

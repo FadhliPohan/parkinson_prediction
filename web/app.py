@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import io
+import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,7 +21,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.datasets.registry import DatasetRegistry
-from src.datasets.splitter import SPLIT_PRESETS
+from src.datasets.splitter import SPLIT_PRESETS, split_dir_for_preset
+from src.training.recommendations import recommend_hyperparams, evaluate_settings
 from src.datasets.validator import discover_class_directories, list_image_files
 from src.inference.model_loader import load_model_bundle
 from src.inference.predictor import predict_from_bundle
@@ -423,6 +427,7 @@ def _build_record_dataframe(records: List[Dict[str, object]]) -> pd.DataFrame:
             {
                 "experiment_id": item.get("experiment_id"),
                 "dataset": item.get("dataset"),
+                "split_preset": item.get("split_preset") or "unknown",
                 "augmentation": item.get("augmentation"),
                 "method": item.get("method"),
                 "model": item.get("model"),
@@ -472,14 +477,26 @@ def render_dataset_tab(dataset_registry: DatasetRegistry) -> None:
         return
 
     default_index = dataset_ids.index(dataset_registry.default_dataset)
-    selected_dataset = st.selectbox("Pilih dataset", dataset_ids, index=default_index, key="dataset_tab_dataset")
+    cds_1, cds_2 = st.columns((2, 1))
+    selected_dataset = cds_1.selectbox("Pilih dataset", dataset_ids, index=default_index, key="dataset_tab_dataset")
     dataset_cfg = dataset_registry.get(selected_dataset)
+
+    preset_choice = cds_2.selectbox(
+        "Preset split",
+        ["config", "80-10-10", "70-15-15"],
+        index=0,
+        key="dataset_tab_split_preset",
+        help="Lihat distribusi folder split untuk preset tertentu (config = folder split dasar).",
+    )
+    split_root = split_dir_for_preset(dataset_cfg.split_path, None if preset_choice == "config" else preset_choice)
+    split_exists = split_root.exists()
 
     st.markdown(
         "<div class='pp-note'>"
         f"<b>Original</b>: <code>{dataset_cfg.original_path}</code><br/>"
-        f"<b>Split</b>: <code>{dataset_cfg.split_path}</code>"
-        "</div>",
+        f"<b>Split ({preset_choice})</b>: <code>{split_root}</code>"
+        + ("" if split_exists else " <b style='color:#b3261e'>(folder belum ada)</b>")
+        + "</div>",
         unsafe_allow_html=True,
     )
     if dataset_cfg.augmentation_options:
@@ -504,7 +521,7 @@ def render_dataset_tab(dataset_registry: DatasetRegistry) -> None:
         st.error(f"Gagal baca dataset original: {exc}")
         original_df = pd.DataFrame()
 
-    split_distribution = _count_split_distribution(dataset_cfg.split_path)
+    split_distribution = _count_split_distribution(split_root)
     split_df = _build_split_table(split_distribution)
 
     total_original = int(original_df["count"].sum()) if not original_df.empty else 0
@@ -752,8 +769,12 @@ def _render_overlay_comparison(subset_df: pd.DataFrame, selected_dataset: str) -
     work_df = subset_df.copy().reset_index(drop=True)
     label_map: Dict[str, Dict[str, object]] = {}
     for _, row in work_df.iterrows():
-        label = "{} | {} | {} | {}".format(
-            row.get("model"), row.get("method"), row.get("augmentation"), row.get("run_id")
+        label = "{} | split={} | {} | {} | {}".format(
+            row.get("model"),
+            row.get("split_preset"),
+            row.get("method"),
+            row.get("augmentation"),
+            row.get("run_id"),
         )
         label_map[label] = row.to_dict()
 
@@ -878,7 +899,7 @@ def _render_comparison_section(
     )
 
     with tab_method:
-        by_method = _latest_per_key(subset_df, ["dataset", "augmentation", "method", "model"]) if not subset_df.empty else pd.DataFrame()
+        by_method = _latest_per_key(subset_df, ["dataset", "split_preset", "augmentation", "method", "model"]) if not subset_df.empty else pd.DataFrame()
         method_summary = pd.DataFrame(
             columns=["method", "runs", "avg_val_accuracy", "avg_test_accuracy", "avg_f1"]
         )
@@ -922,7 +943,7 @@ def _render_comparison_section(
             format_func=lambda opt: _format_option_with_run_count(str(opt), method_count_map),
         )
         method_df = subset_df[subset_df["method"] == selected_method].copy()
-        by_model = _latest_per_key(method_df, ["dataset", "augmentation", "method", "model"]) if not method_df.empty else pd.DataFrame()
+        by_model = _latest_per_key(method_df, ["dataset", "split_preset", "augmentation", "method", "model"]) if not method_df.empty else pd.DataFrame()
         model_summary = pd.DataFrame(
             columns=["model", "runs", "avg_val_accuracy", "avg_test_accuracy", "avg_f1"]
         )
@@ -956,7 +977,7 @@ def _render_comparison_section(
         )
 
     with tab_aug:
-        by_aug = _latest_per_key(subset_df, ["dataset", "augmentation", "method", "model"]) if not subset_df.empty else pd.DataFrame()
+        by_aug = _latest_per_key(subset_df, ["dataset", "split_preset", "augmentation", "method", "model"]) if not subset_df.empty else pd.DataFrame()
         aug_summary = pd.DataFrame(
             columns=["augmentation", "runs", "avg_val_accuracy", "avg_test_accuracy", "avg_f1"]
         )
@@ -994,12 +1015,13 @@ def _render_comparison_section(
         if subset_df.empty:
             st.info("Belum ada run untuk dataset ini.")
             return
-        latest_runs = _latest_per_key(subset_df, ["dataset", "augmentation", "method", "model"])
+        latest_runs = _latest_per_key(subset_df, ["dataset", "split_preset", "augmentation", "method", "model"])
         ranking = latest_runs.sort_values(by="val_accuracy", ascending=False, na_position="last").reset_index(drop=True)
         ranking.index = ranking.index + 1
         ranking_df = ranking[
             [
                 "dataset",
+                "split_preset",
                 "augmentation",
                 "method",
                 "model",
@@ -1150,7 +1172,7 @@ def _render_download_section(records: List[Dict[str, object]]) -> None:
         return
 
     download_columns = [
-        "experiment_id", "dataset", "augmentation", "method", "model", "run_id",
+        "experiment_id", "dataset", "split_preset", "augmentation", "method", "model", "run_id",
         "run_started_at", "epochs", "batch_size", "fine_tune_epochs",
         "train_accuracy", "val_accuracy", "train_loss", "val_loss",
         "test_accuracy", "f1_score", "training_time_seconds",
@@ -1590,6 +1612,66 @@ def render_prediction_tab(
             st.error("Sebagian model gagal dipakai:\n- " + "\n- ".join(errors))
 
 
+WEB_RUN_LOG_DIR = REPORT_ROOT / "_web_runs"
+# Interval polling log saat training berjalan (detik). Tiap rerun pendek sehingga
+# websocket Streamlit tetap aktif dan tidak terlihat "hang"/timeout.
+TRAINING_POLL_SECONDS = 2.0
+
+
+def _read_log_tail(path: Path, max_lines: int = 500) -> str:
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def _start_training_process(command: List[str]):
+    """Jalankan training sebagai subprocess terpisah yang menulis ke file log.
+
+    Proses tetap hidup di antara rerun Streamlit, jadi dashboard tidak perlu
+    memblokir menunggu output -> tidak ada timeout / koneksi mati saat training lama.
+    """
+    WEB_RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = WEB_RUN_LOG_DIR / f"train_{stamp}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
+    log_file.write("Menjalankan: " + " ".join(command) + "\n\n")
+    log_file.flush()
+
+    popen_kwargs: Dict[str, Any] = {
+        "cwd": str(PROJECT_ROOT),
+        "env": build_runtime_env(),
+        "stdout": log_file,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+    }
+    # Buat process group sendiri agar bisa di-stop bersih lintas platform.
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(command, **popen_kwargs)
+    return process, log_path, log_file
+
+
+def _stop_training_process(process) -> None:
+    if process is None:
+        return
+    try:
+        if os.name == "nt":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            process.terminate()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
 def _build_training_command(form: Dict[str, Any]) -> List[str]:
     """Susun command pemanggilan training/train.py dari input form web."""
     train_script = PROJECT_ROOT / "training" / "train.py"
@@ -1609,10 +1691,12 @@ def _build_training_command(form: Dict[str, Any]) -> List[str]:
         # Web non-interaktif: retrain agar benar-benar jalan (run lama tetap tersimpan).
         "--on-existing", "retrain",
     ]
+    # Preset split: 'config' | '80-10-10' | '70-15-15' | 'both'.
+    # Selalu dikirim agar training jelas memakai folder split yang mana.
+    split_presets = str(form.get("split_presets") or "config")
+    cmd += ["--split-presets", split_presets]
     if form.get("split_first"):
         cmd += ["--split-first", "--on-existing-split", "resplit"]
-        if form.get("split_preset"):
-            cmd += ["--split-preset", str(form["split_preset"])]
     return cmd
 
 
@@ -1624,10 +1708,17 @@ def render_training_tab(
 ) -> None:
     st.subheader("Training via Web")
     st.markdown(
-        "<div class='pp-note'>Jalankan training langsung dari dashboard. Proses memakai "
-        "<code>training/train.py</code> di belakang layar. Biarkan tab tetap terbuka selama training berjalan.</div>",
+        "<div class='pp-note'>Jalankan training langsung dari dashboard. Training berjalan sebagai "
+        "proses terpisah dan log dipantau berkala, jadi dashboard <b>tidak akan timeout/mati</b> walau "
+        "training lama. Anda boleh berpindah tab; proses tetap jalan.</div>",
         unsafe_allow_html=True,
     )
+
+    # ------------------------------------------------------------------ #
+    # Jika ada training yang sedang berjalan, tampilkan monitornya lebih dulu.
+    if st.session_state.get("train_active"):
+        _render_active_training_monitor()
+        st.divider()
 
     dataset_ids = dataset_registry.list_dataset_ids()
     if not dataset_ids:
@@ -1657,26 +1748,93 @@ def render_training_tab(
     aug_options = dataset_cfg.augmentation_options or augmentation_registry.list_augmentation_ids()
     selected_aug = c5.selectbox("Augmentasi", aug_options, index=0, key="train_aug")
 
-    st.markdown("**Hyperparameter Dasar**")
-    h1, h2, h3, h4, h5 = st.columns(5)
-    epochs = h1.number_input("Epoch", min_value=1, max_value=500, value=25, step=1, key="train_epochs")
-    batch_size = h2.number_input("Batch size", min_value=1, max_value=256, value=16, step=1, key="train_batch")
-    learning_rate = h3.number_input(
-        "Learning rate", min_value=1e-6, max_value=1.0, value=1e-3, step=1e-4, format="%.6f", key="train_lr"
-    )
-    fine_tune_epochs = h4.number_input("Fine-tune epoch", min_value=0, max_value=200, value=10, step=1, key="train_ft")
-    seed = h5.number_input("Seed", min_value=0, max_value=10_000, value=42, step=1, key="train_seed")
-
-    st.markdown("**Dataset Split**")
-    s1, s2 = st.columns(2)
-    do_split = s1.checkbox("Split ulang sebelum training (--split-first)", value=False, key="train_split_first")
-    split_preset = s2.selectbox(
-        "Preset split", sorted(SPLIT_PRESETS.keys()), index=0, key="train_split_preset", disabled=not do_split
-    )
-
     if not selected_models:
         st.warning("Pilih minimal 1 model.")
         return
+
+    # --- Rekomendasi default per model/method (auto-fill saat pilihan berubah) --- #
+    primary_model = selected_models[0]
+    primary_cfg = model_registry.get(primary_model)
+    rec = recommend_hyperparams(
+        model_id=primary_model,
+        family=primary_cfg.family,
+        framework=primary_cfg.framework,
+        method_id=selected_method,
+    )
+
+    reco_signature = f"{primary_model}|{selected_method}"
+    reco_defaults = {
+        "train_epochs": int(rec.epochs),
+        "train_batch": int(rec.batch_size),
+        "train_ft": int(rec.fine_tune_epochs),
+        "train_lr": float(rec.learning_rate),
+    }
+    if st.session_state.get("train_reco_sig") != reco_signature:
+        # Model/method berubah -> reset hyperparameter ke rekomendasi terbaru.
+        st.session_state["train_reco_sig"] = reco_signature
+        for state_key, value in reco_defaults.items():
+            st.session_state[state_key] = value
+    else:
+        for state_key, value in reco_defaults.items():
+            st.session_state.setdefault(state_key, value)
+    st.session_state.setdefault("train_seed", 42)
+
+    with st.expander(f"Rekomendasi setelan untuk `{primary_model}` + `{selected_method}`", expanded=True):
+        rc1, rc2, rc3, rc4 = st.columns(4)
+        rc1.metric("Epoch disarankan", rec.epochs)
+        rc2.metric("Batch disarankan", rec.batch_size)
+        rc3.metric("Fine-tune disarankan", rec.fine_tune_epochs)
+        rc4.metric("LR disarankan", f"{rec.learning_rate:g}")
+        for note in rec.notes:
+            st.caption("• " + note)
+        if len(selected_models) > 1:
+            st.caption(
+                "Catatan: rekomendasi mengikuti model pertama (`{}`). Model lain mungkin butuh setelan berbeda.".format(
+                    primary_model
+                )
+            )
+
+    st.markdown("**Hyperparameter Dasar**")
+    h1, h2, h3, h4, h5 = st.columns(5)
+    epochs = h1.number_input("Epoch", min_value=1, max_value=500, step=1, key="train_epochs")
+    batch_size = h2.number_input("Batch size", min_value=1, max_value=256, step=1, key="train_batch")
+    learning_rate = h3.number_input(
+        "Learning rate", min_value=1e-6, max_value=1.0, step=1e-4, format="%.6f", key="train_lr"
+    )
+    fine_tune_epochs = h4.number_input("Fine-tune epoch", min_value=0, max_value=200, step=1, key="train_ft")
+    seed = h5.number_input("Seed", min_value=0, max_value=10_000, step=1, key="train_seed")
+
+    # Clue/peringatan bila setelan kurang pas dengan karakter model/method.
+    clues = evaluate_settings(
+        rec,
+        epochs=int(epochs),
+        batch_size=int(batch_size),
+        fine_tune_epochs=int(fine_tune_epochs),
+        learning_rate=float(learning_rate),
+    )
+    if clues:
+        st.warning("Perhatikan setelan berikut:\n\n" + "\n".join(f"- {c}" for c in clues))
+    else:
+        st.success("Setelan hyperparameter sudah dalam rentang wajar untuk model/method ini.")
+
+    st.markdown("**Dataset Split**")
+    s1, s2 = st.columns(2)
+    split_choice = s1.selectbox(
+        "Preset split yang dipakai",
+        ["config", "80-10-10", "70-15-15", "both"],
+        index=0,
+        key="train_split_presets",
+        help=(
+            "config = rasio default config dataset. 80-10-10 / 70-15-15 = preset eksplisit. "
+            "both = latih pada KEDUA preset (folder & report terpisah)."
+        ),
+    )
+    do_split = s2.checkbox(
+        "Split ulang sebelum training (--split-first)",
+        value=False,
+        key="train_split_first",
+        help="Jika dicentang, folder split untuk preset terpilih dibuat ulang sebelum training.",
+    )
 
     form = {
         "dataset": selected_dataset,
@@ -1690,45 +1848,70 @@ def render_training_tab(
         "fine_tune_epochs": int(fine_tune_epochs),
         "seed": int(seed),
         "split_first": bool(do_split),
-        "split_preset": split_preset if do_split else None,
+        "split_presets": split_choice,
     }
 
     command = _build_training_command(form)
     st.markdown("**Command yang akan dijalankan**")
     st.code(" ".join(command), language="bash")
 
-    if not st.button("Mulai Training", type="primary", key="train_run_btn"):
+    start_disabled = bool(st.session_state.get("train_active"))
+    if start_disabled:
+        st.info("Masih ada training berjalan. Tunggu selesai atau hentikan dulu di monitor di atas.")
+
+    if st.button("Mulai Training", type="primary", key="train_run_btn", disabled=start_disabled):
+        try:
+            process, log_path, log_file = _start_training_process(command)
+        except Exception as exc:
+            st.error(f"Gagal memulai training: {exc}")
+            return
+        st.session_state["train_proc"] = process
+        st.session_state["train_log_path"] = str(log_path)
+        st.session_state["train_log_file"] = log_file
+        st.session_state["train_cmd"] = " ".join(command)
+        st.session_state["train_active"] = True
+        st.rerun()
+
+
+def _render_active_training_monitor() -> None:
+    """Pantau training yang berjalan tanpa memblokir UI (auto-refresh berkala)."""
+    process = st.session_state.get("train_proc")
+    log_path = st.session_state.get("train_log_path")
+
+    st.markdown("### Monitor Training Berjalan")
+    if st.session_state.get("train_cmd"):
+        st.code(st.session_state["train_cmd"], language="bash")
+
+    log_text = _read_log_tail(Path(log_path)) if log_path else ""
+    return_code = process.poll() if process is not None else None
+
+    if return_code is None and process is not None:
+        st.info("Status: training sedang berjalan… (log diperbarui otomatis setiap beberapa detik)")
+        if st.button("Hentikan Training", type="secondary", key="train_stop_btn"):
+            _stop_training_process(process)
+            st.warning("Sinyal stop dikirim. Menunggu proses berhenti…")
+        st.code(log_text or "(menunggu output pertama…)")
+        # Refresh ringan: tiap rerun pendek -> koneksi tetap hidup, tidak timeout.
+        time.sleep(TRAINING_POLL_SECONDS)
+        st.rerun()
         return
 
-    st.info("Training dimulai. Output ditampilkan langsung di bawah ini.")
-    log_placeholder = st.empty()
-    log_lines: List[str] = []
-
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=str(PROJECT_ROOT),
-            env=build_runtime_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-    except Exception as exc:
-        st.error(f"Gagal memulai training: {exc}")
-        return
-
-    assert process.stdout is not None
-    for line in process.stdout:
-        log_lines.append(line.rstrip("\n"))
-        # Batasi tampilan agar UI tetap responsif.
-        log_placeholder.code("\n".join(log_lines[-400:]))
-    return_code = process.wait()
+    # Training selesai (atau handle proses hilang).
+    log_file = st.session_state.get("train_log_file")
+    if log_file is not None:
+        try:
+            log_file.close()
+        except Exception:
+            pass
 
     if return_code == 0:
         st.success("Training selesai tanpa error.")
+    elif return_code is None:
+        st.warning("Proses training tidak terlacak lagi (handle hilang). Periksa log di bawah.")
     else:
-        st.error(f"Training selesai dengan kode keluar {return_code}. Periksa log di atas.")
+        st.error(f"Training selesai dengan kode keluar {return_code}. Periksa log di bawah.")
+
+    st.code(log_text or "(log kosong)")
 
     summary_path = REPORT_ROOT / "_workflow_runs" / "latest_workflow_summary.csv"
     summary_df = _read_csv(summary_path)
@@ -1736,6 +1919,11 @@ def render_training_tab(
         st.markdown("**Ringkasan Workflow Terbaru**")
         st.dataframe(summary_df, use_container_width=True)
     st.caption("Lihat detail metrik & grafik pada tab 'Training Report'.")
+
+    if st.button("Tutup monitor / reset", key="train_reset_btn"):
+        for key in ["train_active", "train_proc", "train_log_path", "train_log_file", "train_cmd"]:
+            st.session_state.pop(key, None)
+        st.rerun()
 
 
 def _doc_pretrained_label(model_cfg: "ModelConfig") -> str:

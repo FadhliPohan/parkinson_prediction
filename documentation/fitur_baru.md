@@ -147,3 +147,66 @@ python training/train.py --dataset parkinson_merder --models mobilenetv2 --metho
 # 4) Dashboard (Dataset / Training / Report / Prediksi)
 streamlit run web/app.py
 ```
+
+---
+
+## 6. Preset Split Multi (incl. "keduanya"), Optimizer di Terminal, & Streamlit Non-Blocking
+
+> Update: 2026-06-09.
+
+### 6.1 Preset split dinamis dengan folder & report terpisah
+- Preset rasio split: `80-10-10`, `70-15-15`, `config` (rasio default config dataset),
+  atau `both` (jalankan KEDUA preset).
+- Setiap preset eksplisit ditulis ke **folder terpisah** agar tidak saling menimpa:
+  - `config`  → `dataset/split/<id>` (folder dasar, kompatibel lama)
+  - `80-10-10` → `dataset/split/<id>__80-10-10`
+  - `70-15-15` → `dataset/split/<id>__70-15-15`
+- `split_manifest.json` kini menyimpan field `split_preset` (mis. `"80-10-10"`).
+- Argumen baru:
+  - `training/2.split_data_testing.py --split-presets both|config|80-10-10,70-15-15`
+  - `training/train.py --split-presets both|config|<preset>[,<preset>]`
+  - `--split-preset` (tunggal, lama) tetap ada; bila dipakai eksplisit kini juga
+    menulis ke folder bersuffix preset.
+
+```bash
+# Split kedua preset sekaligus (dua folder terpisah)
+python training/2.split_data_testing.py --dataset parkinson_merder --split-presets both --on-existing-split resplit
+
+# Training pada KEDUA preset (report terpisah, bisa dibandingkan)
+python training/train.py --dataset parkinson_merder --models all --method transfer_learning \
+  --split-first --split-presets both --on-existing retrain
+```
+
+### 6.2 Visibilitas split saat training
+- `train.py` mencetak **preset split aktif + folder** sebelum setiap blok kombinasi,
+  dan menambahkan token `split=<preset>` pada baris `[RUN] ...`.
+- Worker model (`training_common.py`) mencetak `=== Split Dataset Dipakai ===`
+  (preset + rasio yang dibaca dari `split_manifest.json`).
+- `run_manifest.json` menyimpan `dataset.split_preset` & `dataset.split_ratio`.
+- Report/Streamlit menambahkan kolom **`split_preset`** (ringkasan terbaru, ranking,
+  download, overlay), dan deteksi "kombinasi existing" kini memperhitungkan preset
+  sehingga 80-10-10 vs 70-15-15 tidak saling menimpa pointer model.
+
+### 6.3 Pemilihan optimizer di terminal (`main.py`)
+- Semua menu training (5/6/7/8/10/11/12) kini menanyakan **optimizer**: `adam` atau
+  `no_optimize`. Pilihan diteruskan sebagai `--optimizer` ke `train.py`.
+- Semua menu training juga menanyakan **preset split** (termasuk `both`); menu Split
+  (no.3) juga menanyakan preset (incl. `both`).
+
+### 6.4 Streamlit tahan-lama (tidak timeout) saat training
+- Training di tab **Training** kini dijalankan sebagai **proses terpisah** yang menulis
+  ke file log (`report/_web_runs/train_*.log`).
+- Dashboard memantau log secara berkala (rerun pendek tiap ~2 detik) sehingga koneksi
+  websocket tetap hidup dan **tidak terlihat hang/mati** walau training lama. Tersedia
+  tombol **Hentikan Training** dan reset monitor.
+
+### 6.5 Default & clue hyperparameter per model/method (`src/training/recommendations.py`)
+- Saat model/method dipilih, hyperparameter (epoch, batch, fine-tune, LR) **otomatis
+  terisi** dengan rekomendasi yang sesuai karakter model:
+  - CNN pretrained ringan vs berat (batch lebih kecil), ResNeXt50 & Transformer
+    (from-scratch → epoch lebih banyak, fine-tune 0), YOLO (fine-tune tidak dipakai).
+  - Method `baseline` → from-scratch (fine-tune 0, epoch dinaikkan); `full_fine_tuning`
+    → fine-tune lebih panjang; `*_mixed_precision` → boleh batch lebih besar.
+- Dashboard menampilkan **clue/peringatan** bila setelan kurang pas (mis. fine-tune
+  diaktifkan pada model from-scratch, batch terlalu besar → risiko OOM, LR terlalu besar,
+  epoch terlalu kecil).
