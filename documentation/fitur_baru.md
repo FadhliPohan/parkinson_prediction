@@ -213,3 +213,15 @@ python training/train.py --dataset parkinson_merder --models all --method transf
 - Dashboard menampilkan **clue/peringatan** bila setelan kurang pas (mis. fine-tune
   diaktifkan pada model from-scratch, batch terlalu besar → risiko OOM, LR terlalu besar,
   epoch terlalu kecil).
+
+### 6.6 Tab Training Streamlit: semua pilihan multi-select (jalankan semua kombinasi)
+- **Dataset, Model, Method, Optimizer, Augmentasi, dan Preset split** di tab Training kini
+  semuanya **multi-select**. Satu kali klik "Mulai Training" menjalankan **semua kombinasi**
+  dataset × model × method × optimizer × augmentasi × preset split dalam **satu proses**.
+- Dashboard menampilkan estimasi **total kombinasi** sebelum dijalankan.
+- Fan-out optimizer baru di `train.py` via argumen `--optimizers` (mis. `all` atau
+  `adam,no_optimize`); optimizer kini menjadi dimensi kombinasi (masuk `experiment_id`,
+  deteksi run existing, dan summary). `--optimizer` (tunggal) tetap didukung.
+- Opsi augmentasi adalah **gabungan** dari semua dataset terpilih.
+- Rekomendasi/clue hyperparameter mengikuti **model & method pertama** yang dipilih
+  (karena epoch/batch/LR berlaku global untuk seluruh kombinasi pada satu run web).

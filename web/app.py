@@ -1693,16 +1693,21 @@ def _stop_training_process(process) -> None:
 
 
 def _build_training_command(form: Dict[str, Any]) -> List[str]:
-    """Susun command pemanggilan training/train.py dari input form web."""
+    """Susun command pemanggilan training/train.py dari input form web.
+
+    Semua dimensi (dataset, model, method, optimizer, augmentasi, preset split)
+    bisa banyak nilai; train.py akan menjalankan SEMUA kombinasi yang dipilih.
+    """
     train_script = PROJECT_ROOT / "training" / "train.py"
     cmd: List[str] = [
         str(get_runtime_python()),
         str(train_script),
-        "--dataset", str(form["dataset"]),
+        "--dataset", ",".join(form["datasets"]),
         "--models", ",".join(form["models"]),
-        "--method", str(form["method"]),
-        "--augmentations", str(form["augmentation"]),
-        "--optimizer", str(form["optimizer"]),
+        "--method", ",".join(form["methods"]),
+        "--augmentations", ",".join(form["augmentations"]),
+        "--optimizers", ",".join(form["optimizers"]),
+        "--split-presets", ",".join(form["split_presets"]),
         "--epochs", str(form["epochs"]),
         "--batch-size", str(form["batch_size"]),
         "--learning-rate", str(form["learning_rate"]),
@@ -1711,10 +1716,6 @@ def _build_training_command(form: Dict[str, Any]) -> List[str]:
         # Web non-interaktif: retrain agar benar-benar jalan (run lama tetap tersimpan).
         "--on-existing", "retrain",
     ]
-    # Preset split: 'config' | '80-10-10' | '70-15-15' | 'both'.
-    # Selalu dikirim agar training jelas memakai folder split yang mana.
-    split_presets = str(form.get("split_presets") or "config")
-    cmd += ["--split-presets", split_presets]
     if form.get("split_first"):
         cmd += ["--split-first", "--on-existing-split", "resplit"]
     return cmd
@@ -1745,35 +1746,67 @@ def render_training_tab(
         st.info("Belum ada dataset terdaftar.")
         return
 
+    st.markdown(
+        "<div class='pp-note'>Semua pilihan di bawah <b>boleh banyak</b> (multi-select). "
+        "Training akan menjalankan <b>semua kombinasi</b> dataset × model × method × optimizer × "
+        "augmentasi × preset split yang dipilih, dalam satu proses.</div>",
+        unsafe_allow_html=True,
+    )
+
     c1, c2 = st.columns(2)
-    selected_dataset = c1.selectbox("Dataset", dataset_ids, index=0, key="train_dataset")
-    dataset_cfg = dataset_registry.get(selected_dataset)
+    selected_datasets = c1.multiselect(
+        "Dataset (boleh banyak)", dataset_ids, default=dataset_ids[: min(1, len(dataset_ids))], key="train_datasets"
+    )
 
     model_options = model_registry.list_model_ids(enabled_only=True)
     selected_models = c2.multiselect(
-        "Model", model_options, default=model_options[: min(1, len(model_options))], key="train_models"
+        "Model (boleh banyak)", model_options, default=model_options[: min(1, len(model_options))], key="train_models"
     )
 
     c3, c4, c5 = st.columns(3)
     method_options = method_registry.list_method_ids()
-    selected_method = c3.selectbox("Method", method_options, index=0, key="train_method")
+    selected_methods = c3.multiselect(
+        "Method (boleh banyak)", method_options, default=method_options[: min(1, len(method_options))], key="train_methods"
+    )
     optimizer_options = list_optimizers()
-    selected_optimizer = c4.selectbox(
-        "Optimizer",
+    selected_optimizers = c4.multiselect(
+        "Optimizer (boleh banyak)",
         optimizer_options,
-        index=optimizer_options.index("adam") if "adam" in optimizer_options else 0,
-        key="train_optimizer",
+        default=["adam"] if "adam" in optimizer_options else optimizer_options[: min(1, len(optimizer_options))],
+        key="train_optimizers",
         help=" | ".join(f"{k}: {v}" for k, v in OPTIMIZER_DESCRIPTIONS.items()),
     )
-    aug_options = dataset_cfg.augmentation_options or augmentation_registry.list_augmentation_ids()
-    selected_aug = c5.selectbox("Augmentasi", aug_options, index=0, key="train_aug")
+    # Augmentasi: gabungan opsi dari semua dataset terpilih.
+    aug_options: List[str] = []
+    for ds_id in (selected_datasets or dataset_ids):
+        for aug in (dataset_registry.get(ds_id).augmentation_options or augmentation_registry.list_augmentation_ids()):
+            if aug not in aug_options:
+                aug_options.append(aug)
+    if not aug_options:
+        aug_options = augmentation_registry.list_augmentation_ids()
+    selected_augs = c5.multiselect(
+        "Augmentasi (boleh banyak)", aug_options, default=aug_options[: min(1, len(aug_options))], key="train_augs"
+    )
 
+    if not selected_datasets:
+        st.warning("Pilih minimal 1 dataset.")
+        return
     if not selected_models:
         st.warning("Pilih minimal 1 model.")
+        return
+    if not selected_methods:
+        st.warning("Pilih minimal 1 method.")
+        return
+    if not selected_optimizers:
+        st.warning("Pilih minimal 1 optimizer.")
+        return
+    if not selected_augs:
+        st.warning("Pilih minimal 1 augmentasi.")
         return
 
     # --- Rekomendasi default per model/method (auto-fill saat pilihan berubah) --- #
     primary_model = selected_models[0]
+    selected_method = selected_methods[0]
     primary_cfg = model_registry.get(primary_model)
     rec = recommend_hyperparams(
         model_id=primary_model,
@@ -1839,14 +1872,14 @@ def render_training_tab(
 
     st.markdown("**Dataset Split**")
     s1, s2 = st.columns(2)
-    split_choice = s1.selectbox(
-        "Preset split yang dipakai",
-        ["config", "80-10-10", "70-15-15", "both"],
-        index=0,
+    selected_presets = s1.multiselect(
+        "Preset split (boleh banyak)",
+        ["config", "80-10-10", "70-15-15"],
+        default=["config"],
         key="train_split_presets",
         help=(
             "config = rasio default config dataset. 80-10-10 / 70-15-15 = preset eksplisit. "
-            "both = latih pada KEDUA preset (folder & report terpisah)."
+            "Pilih beberapa untuk melatih pada tiap preset (folder & report terpisah)."
         ),
     )
     do_split = s2.checkbox(
@@ -1855,20 +1888,45 @@ def render_training_tab(
         key="train_split_first",
         help="Jika dicentang, folder split untuk preset terpilih dibuat ulang sebelum training.",
     )
+    if not selected_presets:
+        st.warning("Pilih minimal 1 preset split.")
+        return
+
+    # Estimasi jumlah kombinasi yang akan dijalankan.
+    total_combos = (
+        len(selected_datasets)
+        * len(selected_models)
+        * len(selected_methods)
+        * len(selected_optimizers)
+        * len(selected_augs)
+        * len(selected_presets)
+    )
+    st.caption(
+        "Total kombinasi yang akan dijalankan: **{}** "
+        "(dataset {} × model {} × method {} × optimizer {} × augmentasi {} × preset {})".format(
+            total_combos,
+            len(selected_datasets),
+            len(selected_models),
+            len(selected_methods),
+            len(selected_optimizers),
+            len(selected_augs),
+            len(selected_presets),
+        )
+    )
 
     form = {
-        "dataset": selected_dataset,
+        "datasets": selected_datasets,
         "models": selected_models,
-        "method": selected_method,
-        "optimizer": selected_optimizer,
-        "augmentation": selected_aug,
+        "methods": selected_methods,
+        "optimizers": selected_optimizers,
+        "augmentations": selected_augs,
+        "split_presets": selected_presets,
         "epochs": int(epochs),
         "batch_size": int(batch_size),
         "learning_rate": float(learning_rate),
         "fine_tune_epochs": int(fine_tune_epochs),
         "seed": int(seed),
         "split_first": bool(do_split),
-        "split_presets": split_choice,
     }
 
     command = _build_training_command(form)

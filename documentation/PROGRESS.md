@@ -119,6 +119,15 @@
       selectbox preset split (incl. `both`), auto-fill default + peringatan per model/method, kolom `split_preset` di report (ringkasan/ranking/download/overlay), preset selector di tab Dataset
 - [x] Dokumentasi: `fitur_baru.md` (section 6), `PROGRESS.md` (file ini)
 
+## T8 — Tab Training Streamlit multi-select + fan-out optimizer (2026-06-09)
+- [x] `train.py`: arg `--optimizers` (all/list) + loop optimizer (dalam loop method); optimizer masuk
+      `experiment_id`, `_find_existing_runs`, estimasi kombinasi, result/summary CSV, dan baris `[RUN]`
+- [x] `web/app.py`: tab Training — **dataset, model, method, optimizer, augmentasi, preset split** semua
+      multi-select; `_build_training_command` kirim CSV (`--dataset`/`--models`/`--method`/`--augmentations`/`--optimizers`/`--split-presets`);
+      tampil estimasi total kombinasi; opsi augmentasi = gabungan dataset terpilih
+- [x] Dokumentasi: `fitur_baru.md` (section 6.6), `PROGRESS.md`
+- [x] Verifikasi: `py_compile` OK; parse argv multi gaya web OK; `_resolve_optimizer_list` (all/list/single/none) OK
+
 ## Verifikasi
 - [x] `py_compile` semua file yang diubah → OK
 - [x] Uji fungsi optimizer registry & resolusi/validasi split → OK
