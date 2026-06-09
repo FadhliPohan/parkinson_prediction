@@ -428,6 +428,7 @@ def _build_record_dataframe(records: List[Dict[str, object]]) -> pd.DataFrame:
                 "experiment_id": item.get("experiment_id"),
                 "dataset": item.get("dataset"),
                 "split_preset": item.get("split_preset") or "unknown",
+                "optimizer": item.get("optimizer") or "unknown",
                 "augmentation": item.get("augmentation"),
                 "method": item.get("method"),
                 "model": item.get("model"),
@@ -612,6 +613,22 @@ def _render_run_detail(record: Dict[str, object]) -> None:
     c_cfg_1.metric("Epoch Stage-1", str(epochs_value) if epochs_value is not None else "-")
     c_cfg_2.metric("Batch Size", str(batch_size_value) if batch_size_value is not None else "-")
     c_cfg_3.metric("Fine-tune Epochs", str(fine_tune_epochs_value) if fine_tune_epochs_value is not None else "-")
+
+    split_preset_value = str(record.get("split_preset") or run_params.get("split_preset") or "-")
+    optimizer_value = str(record.get("optimizer") or run_params.get("optimizer") or "-")
+    split_ratio_value = record.get("split_ratio")
+    if isinstance(split_ratio_value, dict):
+        split_ratio_text = "train={} / test={} / val={}".format(
+            split_ratio_value.get("train"),
+            split_ratio_value.get("testing"),
+            split_ratio_value.get("validation"),
+        )
+    else:
+        split_ratio_text = "-"
+    c_cfg_4, c_cfg_5, c_cfg_6 = st.columns(3)
+    c_cfg_4.metric("Split Preset", split_preset_value)
+    c_cfg_5.metric("Optimizer", optimizer_value)
+    c_cfg_6.metric("Rasio Split", split_ratio_text)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Train Accuracy", _metric_text(_safe_float(record.get("train_accuracy"))))
@@ -803,6 +820,8 @@ def _render_overlay_comparison(subset_df: pd.DataFrame, selected_dataset: str) -
         metric_rows.append(
             {
                 "model": row.get("model"),
+                "split_preset": row.get("split_preset"),
+                "optimizer": row.get("optimizer"),
                 "method": row.get("method"),
                 "augmentation": row.get("augmentation"),
                 "run_id": row.get("run_id"),
@@ -1022,6 +1041,7 @@ def _render_comparison_section(
             [
                 "dataset",
                 "split_preset",
+                "optimizer",
                 "augmentation",
                 "method",
                 "model",
@@ -1172,7 +1192,7 @@ def _render_download_section(records: List[Dict[str, object]]) -> None:
         return
 
     download_columns = [
-        "experiment_id", "dataset", "split_preset", "augmentation", "method", "model", "run_id",
+        "experiment_id", "dataset", "split_preset", "optimizer", "augmentation", "method", "model", "run_id",
         "run_started_at", "epochs", "batch_size", "fine_tune_epochs",
         "train_accuracy", "val_accuracy", "train_loss", "val_loss",
         "test_accuracy", "f1_score", "training_time_seconds",

@@ -273,6 +273,7 @@ def build_latest_summary_table(report_root: Path) -> List[Dict[str, object]]:
             {
                 "dataset": record.get("dataset"),
                 "split_preset": record.get("split_preset"),
+                "optimizer": record.get("optimizer"),
                 "augmentation": record.get("augmentation"),
                 "method": record.get("method"),
                 "model": record.get("model"),

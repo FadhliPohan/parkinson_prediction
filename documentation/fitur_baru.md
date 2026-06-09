@@ -183,9 +183,12 @@ python training/train.py --dataset parkinson_merder --models all --method transf
 - Worker model (`training_common.py`) mencetak `=== Split Dataset Dipakai ===`
   (preset + rasio yang dibaca dari `split_manifest.json`).
 - `run_manifest.json` menyimpan `dataset.split_preset` & `dataset.split_ratio`.
-- Report/Streamlit menambahkan kolom **`split_preset`** (ringkasan terbaru, ranking,
-  download, overlay), dan deteksi "kombinasi existing" kini memperhitungkan preset
+- Report/Streamlit menambahkan kolom **`split_preset`** dan **`optimizer`** (ringkasan
+  terbaru, ranking, download, overlay, serta detail run di Explorer yang juga menampilkan
+  **rasio split**), dan deteksi "kombinasi existing" kini memperhitungkan preset
   sehingga 80-10-10 vs 70-15-15 tidak saling menimpa pointer model.
+- `report_reader` men-surface `optimizer` dari `run_manifest.json`
+  (`training.parameters.optimizer`).
 
 ### 6.3 Pemilihan optimizer di terminal (`main.py`)
 - Semua menu training (5/6/7/8/10/11/12) kini menanyakan **optimizer**: `adam` atau
