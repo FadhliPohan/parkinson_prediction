@@ -597,13 +597,25 @@ def main() -> None:
             )
             selected_method_ids = _parse_csv_selection(methods_arg, method_ids)
             method_overrides = ask_method_runtime_overrides(selected_method_ids)
-            split_presets = ask_split_preset_selection(allow_both=True)
             selected_optimizer = ask_optimizer()
             on_existing_mode = ask_on_existing_mode()
+
+            # Split dulu, baru preset, agar pilihan preset selaras dengan apakah
+            # folder split akan dibuat. Mencegah memilih preset non-default tetapi
+            # folder split-nya belum ada.
             split_first = ask_yes_no("Jalankan split dataset dulu?", False)
+            split_presets = ask_split_preset_selection(allow_both=True)
             on_existing_split_mode = "ask"
             if split_first:
                 on_existing_split_mode = ask_on_existing_split_mode()
+            elif split_presets != "config":
+                print(
+                    "[INFO] Preset split '{}' dipilih tanpa split ulang. Pastikan folder split "
+                    "preset tersebut SUDAH ADA (mis. via menu 3 / aktifkan split dulu). "
+                    "Jika belum ada, training akan dihentikan dengan pesan yang jelas.".format(split_presets)
+                )
+            check_first = ask_yes_no("Jalankan dataset check dulu?", False)
+            augment_info = ask_yes_no("Tampilkan info augmentasi sebelum training?", False)
             runtime_toggles = ask_runtime_toggles()
 
             command = build_train_command(
@@ -611,9 +623,9 @@ def main() -> None:
                 models=models_arg,
                 method_id=methods_arg,
                 all_methods=False,
-                check_first=ask_yes_no("Jalankan dataset check dulu?", False),
+                check_first=check_first,
                 split_first=split_first,
-                augment_info=ask_yes_no("Tampilkan info augmentasi sebelum training?", False),
+                augment_info=augment_info,
                 preprocessing_mode="augment",
                 augmentations=augmentations_arg,
                 on_existing=on_existing_mode,
