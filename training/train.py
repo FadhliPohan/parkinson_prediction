@@ -42,6 +42,26 @@ ON_EXISTING_SPLIT_CHOICES = ("ask", "resplit", "skip")
 OPTIMIZER_CHOICES = ("adam", "no_optimize")
 METHOD_RUNTIME_OVERRIDE_KEYS = ("epochs", "batch_size", "fine_tune_epochs")
 
+# Dipaksa True oleh --non-interactive (mis. saat dipanggil dari web/Streamlit).
+# Saat True, semua prompt input() dilewati dan dipakai default non-interaktif.
+NON_INTERACTIVE = False
+
+
+def _session_is_interactive() -> bool:
+    """True hanya jika benar-benar bisa membaca jawaban user dari terminal.
+
+    Subprocess yang dijalankan dari web mewarisi tty milik proses streamlit,
+    sehingga sys.stdin.isatty() bisa True padahal tidak ada yang bisa mengetik.
+    Flag --non-interactive (-> NON_INTERACTIVE) mematikan semua prompt agar
+    training tidak menggantung menunggu ketikan.
+    """
+    if NON_INTERACTIVE:
+        return False
+    try:
+        return bool(sys.stdin) and sys.stdin.isatty()
+    except Exception:
+        return False
+
 
 def _sanitize_token(value: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value).strip())
@@ -336,7 +356,12 @@ def _ask_resplit_for_dataset(dataset_id: str, split_dir: Path) -> bool:
         f"{split_dir}\n"
         "Perlu dilakukan split ulang? [y/N]: "
     )
-    answer = input(prompt).strip().lower()
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError:
+        # stdin tertutup (mis. dipanggil dari web) -> jangan menggantung.
+        print("[INFO] Tidak ada input (sesi non-interaktif). Split lama digunakan.")
+        return False
     return answer in {"y", "yes"}
 
 
@@ -353,7 +378,7 @@ def _should_run_split(dataset_cfg: DatasetConfig, on_existing_split: str) -> boo
         print("[INFO] `--on-existing-split skip` aktif. Split lama akan digunakan.")
         return False
 
-    if not sys.stdin.isatty():
+    if not _session_is_interactive():
         print(
             "[INFO] Split folder sudah ada, tetapi sesi non-interaktif tidak bisa bertanya. "
             "Split lama akan digunakan. Gunakan `--on-existing-split resplit` untuk memaksa split ulang."
@@ -567,7 +592,12 @@ def _ask_global_retrain_confirmation(total_combos: int, existing_combos: int) ->
         "Pointer model terbaru akan berubah ke run baru, tetapi run/model lama tetap disimpan sebagai histori.\n"
         "Lanjutkan training ulang? [y/N]: "
     )
-    answer = input(prompt).strip().lower()
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError:
+        # stdin tertutup (mis. dipanggil dari web) -> jangan menggantung.
+        print("[INFO] Tidak ada input (sesi non-interaktif). Anggap jawaban 'tidak'.")
+        return False
     return answer in {"y", "yes"}
 
 
@@ -588,7 +618,7 @@ def _resolve_on_existing_once(
         print("[INFO] `--on-existing skip` aktif. Semua kombinasi existing akan dilewati.")
         return "skip"
 
-    if not sys.stdin.isatty():
+    if not _session_is_interactive():
         if requested_mode == "ask":
             print(
                 "[INFO] Mode `ask` tidak bisa konfirmasi pada sesi non-interaktif. "
@@ -788,6 +818,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Perilaku jika folder split dataset sudah ada: ask, resplit, atau skip.",
     )
     parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help=(
+            "Paksa mode non-interaktif: jangan pernah menanyakan input() walau stdin "
+            "terlihat seperti terminal. Wajib dipakai saat dipanggil dari web/Streamlit "
+            "agar tidak menggantung menunggu ketikan."
+        ),
+    )
+    parser.add_argument(
         "--method-overrides-json",
         type=str,
         default=None,
@@ -891,6 +930,11 @@ def _resolve_optimizer_list(args: argparse.Namespace) -> List[Optional[str]]:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    global NON_INTERACTIVE
+    NON_INTERACTIVE = bool(getattr(args, "non_interactive", False))
+    if NON_INTERACTIVE:
+        print("[INFO] Mode non-interaktif aktif: tidak ada prompt input() yang ditampilkan.")
 
     dataset_registry = DatasetRegistry()
     method_registry = TrainingMethodRegistry()

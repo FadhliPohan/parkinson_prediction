@@ -156,6 +156,8 @@ parkinson_prediction/
    - `--shutdown-on-finish`
    - `--on-existing {ask,retrain,skip}`
    - `--on-existing-split {ask,resplit,skip}`
+   - `--non-interactive` (matikan semua prompt `input()`; wajib saat dipanggil
+     dari web/Streamlit agar training tidak menggantung menunggu ketikan)
 3. Orchestrator mengeksekusi kombinasi terpisah dengan urutan:
    - `dataset -> augmentasi -> method -> model`.
 4. Setiap kombinasi diberi `experiment_id` unik.
@@ -163,6 +165,11 @@ parkinson_prediction/
    - `ask` akan menanyakan konfirmasi training ulang sekali di awal workflow,
    - `retrain` langsung membuat run/model baru dengan timestamp baru,
    - `skip` melewati kombinasi tersebut.
+   - Pada sesi non-interaktif (`--non-interactive`, atau stdin tertutup/`DEVNULL`):
+     `ask` -> setara `skip`, `retrain` -> lanjut retrain tanpa bertanya. Prompt
+     `input()` tidak pernah dipanggil sehingga proses tidak menggantung. Dashboard
+     Streamlit memindahkan konfirmasi retrain/skip ini ke UI (radio/tombol) sebelum
+     training dijalankan.
 6. Jika `--split-first` dipakai, split existing bisa diputuskan:
    - `ask` (tanya split ulang),
    - `resplit` (paksa split ulang),

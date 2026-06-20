@@ -1663,6 +1663,10 @@ def _start_training_process(command: List[str]):
     popen_kwargs: Dict[str, Any] = {
         "cwd": str(PROJECT_ROOT),
         "env": build_runtime_env(),
+        # stdin DEVNULL: subprocess JANGAN mewarisi tty milik streamlit. Tanpa ini,
+        # train.py mengira sesi interaktif lalu memanggil input() dan menggantung
+        # selamanya (mis. prompt "Lanjutkan training ulang? [y/N]").
+        "stdin": subprocess.DEVNULL,
         "stdout": log_file,
         "stderr": subprocess.STDOUT,
         "text": True,
@@ -1692,6 +1696,63 @@ def _stop_training_process(process) -> None:
             pass
 
 
+def _web_preset_to_record_label(preset: str) -> str:
+    """Samakan label preset form web dengan nilai split_preset di report.
+
+    train.py memakai `normalize_preset(p) or "config-default"`, jadi "config"
+    (dan alias default) tercatat sebagai "config-default" di manifest.
+    """
+    key = str(preset).strip().lower().replace("_", "-")
+    if key in {"", "config", "default", "config-default"}:
+        return "config-default"
+    return key
+
+
+def _count_existing_training_combos(form: Dict[str, Any]) -> int:
+    """Hitung berapa kombinasi terpilih yang SUDAH pernah ditraining.
+
+    Dipakai untuk menampilkan konfirmasi sebelum training (retrain vs skip)
+    agar user tidak perlu mengetik y/N di terminal. Pencocokan mengikuti
+    dimensi yang dicatat report: dataset, augmentasi, method, model,
+    split_preset, optimizer.
+    """
+    try:
+        records = build_experiment_index(REPORT_ROOT)
+    except Exception:
+        return 0
+
+    existing_keys = {
+        (
+            str(r.get("dataset") or ""),
+            str(r.get("augmentation") or ""),
+            str(r.get("method") or ""),
+            str(r.get("model") or ""),
+            str(r.get("split_preset") or ""),
+            str(r.get("optimizer") or ""),
+        )
+        for r in records
+    }
+
+    count = 0
+    for dataset in form["datasets"]:
+        for aug in form["augmentations"]:
+            for method in form["methods"]:
+                for model in form["models"]:
+                    for preset in form["split_presets"]:
+                        for optimizer in form["optimizers"]:
+                            key = (
+                                str(dataset),
+                                str(aug),
+                                str(method),
+                                str(model),
+                                _web_preset_to_record_label(preset),
+                                str(optimizer),
+                            )
+                            if key in existing_keys:
+                                count += 1
+    return count
+
+
 def _build_training_command(form: Dict[str, Any]) -> List[str]:
     """Susun command pemanggilan training/train.py dari input form web.
 
@@ -1713,8 +1774,12 @@ def _build_training_command(form: Dict[str, Any]) -> List[str]:
         "--learning-rate", str(form["learning_rate"]),
         "--fine-tune-epochs", str(form["fine_tune_epochs"]),
         "--seed", str(form["seed"]),
-        # Web non-interaktif: retrain agar benar-benar jalan (run lama tetap tersimpan).
-        "--on-existing", "retrain",
+        # Web selalu non-interaktif: train.py tidak boleh memanggil input() (akan
+        # menggantung karena tidak ada terminal untuk mengetik).
+        "--non-interactive",
+        # Mode untuk kombinasi yang sudah pernah ditraining: dipilih user via UI
+        # (retrain = latih ulang + buat run baru, skip = lewati yang sudah ada).
+        "--on-existing", str(form.get("on_existing", "retrain")),
     ]
     if form.get("split_first"):
         cmd += ["--split-first", "--on-existing-split", "resplit"]
@@ -1928,6 +1993,39 @@ def render_training_tab(
         "seed": int(seed),
         "split_first": bool(do_split),
     }
+
+    # ------------------------------------------------------------------ #
+    # Konfirmasi kombinasi yang SUDAH pernah ditraining.
+    # Menggantikan prompt terminal "Lanjutkan training ulang? [y/N]" yang
+    # tidak bisa dijawab dari Streamlit. User memilih via radio/tombol.
+    existing_count = _count_existing_training_combos(form)
+    on_existing = "retrain"
+    if existing_count > 0:
+        st.warning(
+            "Ditemukan **{}** dari {} kombinasi yang **sudah pernah ditraining**. "
+            "Pilih tindakan sebelum mulai:".format(existing_count, total_combos)
+        )
+        choice = st.radio(
+            "Untuk kombinasi yang sudah ada:",
+            options=["retrain", "skip"],
+            format_func=lambda v: (
+                "Latih ulang (retrain) — buat run baru, run/model lama tetap disimpan"
+                if v == "retrain"
+                else "Lewati yang sudah ada (skip) — hanya latih kombinasi yang belum pernah"
+            ),
+            key="train_on_existing",
+            horizontal=False,
+        )
+        on_existing = choice
+        if on_existing == "skip" and existing_count >= total_combos:
+            st.error(
+                "Semua kombinasi terpilih sudah pernah ditraining. Dengan mode `skip` "
+                "tidak ada yang akan dilatih. Pilih `retrain` atau ubah pilihan kombinasi."
+            )
+    else:
+        st.success("Tidak ada kombinasi yang bentrok dengan histori. Training akan langsung jalan.")
+
+    form["on_existing"] = on_existing
 
     command = _build_training_command(form)
     st.markdown("**Command yang akan dijalankan**")

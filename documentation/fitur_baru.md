@@ -225,3 +225,18 @@ python training/train.py --dataset parkinson_merder --models all --method transf
 - Opsi augmentasi adalah **gabungan** dari semua dataset terpilih.
 - Rekomendasi/clue hyperparameter mengikuti **model & method pertama** yang dipilih
   (karena epoch/batch/LR berlaku global untuk seluruh kombinasi pada satu run web).
+
+### 6.7 Konfirmasi retrain via UI + fix training web menggantung (2026-06-20)
+- **Masalah lama**: saat menjalankan training dari web, train.py menampilkan prompt
+  terminal `Lanjutkan training ulang? [y/N]` untuk kombinasi yang sudah pernah dilatih.
+  Karena Streamlit tidak punya stdin yang bisa diketik, training **menggantung total**.
+- **Akar masalah**: subprocess mewarisi tty milik proses `streamlit run`, sehingga
+  `sys.stdin.isatty()` bernilai True dan train.py mengira sesi interaktif.
+- **Perbaikan**:
+  - `web/app.py` menjalankan subprocess dengan `stdin=DEVNULL` (tidak mewarisi tty).
+  - `train.py` punya flag `--non-interactive` (dipakai web) + helper `_session_is_interactive()`;
+    semua `input()` dibungkus `try/except EOFError` → tidak pernah menggantung.
+  - **Konfirmasi dipindah ke UI**: sebelum "Mulai Training", dashboard mendeteksi berapa
+    kombinasi terpilih yang sudah pernah ditraining lalu menampilkan pilihan
+    **Latih ulang (retrain)** vs **Lewati yang sudah ada (skip)**. Pilihan dikirim ke
+    train.py via `--on-existing`. Tidak perlu lagi mengetik y/N di terminal.

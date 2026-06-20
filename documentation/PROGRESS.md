@@ -128,6 +128,23 @@
 - [x] Dokumentasi: `fitur_baru.md` (section 6.6), `PROGRESS.md`
 - [x] Verifikasi: `py_compile` OK; parse argv multi gaya web OK; `_resolve_optimizer_list` (all/list/single/none) OK
 
+## T9 — Fix training web menggantung di prompt "retrain" + konfirmasi via UI (2026-06-20)
+- [x] **Akar masalah**: subprocess `train.py` dari web mewarisi tty milik `streamlit run`,
+      jadi `sys.stdin.isatty()`=True → train.py memanggil `input("Lanjutkan training ulang? [y/N]")`
+      yang menggantung selamanya (tidak ada terminal untuk mengetik). `--on-existing retrain`
+      yang sudah dikirim web pun tetap terblokir karena guard lama hanya cek `isatty`.
+- [x] `web/app.py` `_start_training_process`: tambah `stdin=subprocess.DEVNULL` →
+      subprocess tidak mewarisi tty; train.py terdeteksi non-interaktif dengan benar.
+- [x] `training/train.py`: flag baru `--non-interactive` + helper `_session_is_interactive()`
+      (`NON_INTERACTIVE` global). Semua cek `not sys.stdin.isatty()` diganti `not _session_is_interactive()`.
+      `input()` di `_ask_resplit_for_dataset` & `_ask_global_retrain_confirmation` dibungkus
+      `try/except EOFError` agar tak pernah menggantung.
+- [x] `web/app.py`: konfirmasi **via UI sebelum training** (menggantikan ketikan y/N terminal).
+      Helper `_count_existing_training_combos()` + `_web_preset_to_record_label()` mendeteksi
+      kombinasi yang sudah pernah ditraining; bila ada, tampil radio **retrain** vs **skip**.
+      `_build_training_command` kirim `--non-interactive` + `--on-existing <pilihan user>`.
+- [x] Verifikasi: `py_compile` train.py & app.py OK; `train.py --help` memunculkan `--non-interactive`.
+
 ## Verifikasi
 - [x] `py_compile` semua file yang diubah → OK
 - [x] Uji fungsi optimizer registry & resolusi/validasi split → OK
