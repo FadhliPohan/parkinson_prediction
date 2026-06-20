@@ -1,0 +1,3 @@
+# Skrip shell harus selalu LF agar bisa dijalankan di WSL/Linux
+# (mencegah error "bad interpreter: /usr/bin/env bash^M" akibat CRLF Windows).
+*.sh text eol=lf

@@ -120,3 +120,54 @@ Lalu buka URL lokal dari output Streamlit (biasanya `http://localhost:8501`).
 2. Setelah stabil, naikkan ke pipeline multi-model dan multi-method.
 3. Gunakan `--on-existing ask` agar retrain tidak terjadi tanpa konfirmasi.
 4. Simpan eksperimen bertahap agar histori run mudah dianalisis dari folder `report/`.
+
+## 9. Update Kode & Restart Dashboard (WSL / Linux) — `deploy.sh`
+
+Untuk VM Windows yang diakses via **WSL Ubuntu**, dashboard sebaiknya dijalankan
+di background agar tidak mati saat terminal/SSH ditutup. Skrip `deploy.sh`
+(di root project) melakukan: `git pull` → restart Streamlit → jalan di background.
+
+### A. Persiapan sekali saja
+```bash
+cd /path/ke/parkinson_prediction
+chmod +x deploy.sh
+# Jika skrip pernah error "bad interpreter: ...^M" (akibat CRLF dari Windows):
+sed -i 's/\r$//' deploy.sh
+```
+> Catatan: `.gitattributes` sudah memaksa `*.sh` memakai LF, jadi hasil `git pull`
+> berikutnya tidak akan ber-CRLF lagi.
+
+### B. Pemakaian harian
+```bash
+./deploy.sh            # git pull + restart Streamlit (default)
+./deploy.sh restart    # restart TANPA git pull
+./deploy.sh stop       # hentikan Streamlit
+./deploy.sh status     # cek status + URL
+./deploy.sh logs       # pantau log Streamlit (tail -f)
+```
+
+Variabel opsional:
+```bash
+PORT=8502 ./deploy.sh            # ganti port (default 8501)
+ADDRESS=127.0.0.1 ./deploy.sh    # batasi akses ke localhost (default 0.0.0.0)
+STOP_TRAINING=1 ./deploy.sh      # ikut hentikan training train.py yang berjalan
+```
+
+### C. Perilaku terhadap proses background
+1. `git pull` **tidak** memengaruhi training yang sedang berjalan (kode sudah
+   dimuat ke memori). Perubahan baru hanya berlaku untuk training berikutnya.
+2. Secara default `deploy.sh` **hanya me-restart Streamlit**; training (proses
+   detached) dibiarkan jalan. Pakai `STOP_TRAINING=1` bila ingin menghentikannya.
+3. Setelah Streamlit di-restart, tab Monitor mungkin tidak lagi menampilkan
+   training lama (state UI hilang), tetapi prosesnya **tetap berjalan** dan
+   lognya tetap bertambah di `report/_web_runs/train_*.log`.
+4. Streamlit dijalankan dengan `nohup ... < /dev/null`, sehingga training yang
+   diluncurkan dari web **tidak mewarisi tty** dan tidak akan menggantung di
+   prompt konfirmasi (lihat juga flag `--non-interactive` di `train.py`).
+
+### D. Catatan WSL
+1. WSL2 mem-forward `localhost`, jadi buka `http://localhost:8501` dari browser
+   Windows. Untuk akses dari perangkat lain di jaringan, pakai `ADDRESS=0.0.0.0`
+   (default) dan buka IP WSL/Windows yang sesuai.
+2. Untuk performa training, taruh project di filesystem **native WSL** (mis.
+   `~/parkinson_prediction`), bukan di `/mnt/c/...` (akses lintas-FS lambat).

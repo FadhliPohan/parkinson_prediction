@@ -145,6 +145,22 @@
       `_build_training_command` kirim `--non-interactive` + `--on-existing <pilihan user>`.
 - [x] Verifikasi: `py_compile` train.py & app.py OK; `train.py --help` memunculkan `--non-interactive`.
 
+## T10 — Hapus run dari tabel "Ringkasan Run Terbaru per Kombinasi" (2026-06-20)
+- [x] **Tujuan**: bersihkan model yang kurang baik & hemat storage langsung dari halaman Report.
+- [x] `web/app.py`: refactor `_render_filterable_dataframe` → ekstrak `_apply_table_filters`
+      (filter dapat dipakai ulang oleh tabel berbasis `st.data_editor`).
+- [x] Helper baru di `web/app.py`:
+      `_resolve_model_dir()` (mirror `run_dir` dari `REPORT_ROOT` → `TRAINED_MODELS_ROOT`),
+      `_cleanup_empty_parents()` (hapus folder kombinasi kosong),
+      `_refresh_latest_run_marker()` (perbarui/hapus `latest_run.txt` bila menunjuk run terhapus),
+      `_delete_run_artifacts()` (hapus folder report + model satu run, kembalikan status).
+- [x] `_render_latest_summary_with_delete()`: tabel `st.data_editor` dengan kolom checkbox
+      **Hapus** + konfirmasi (checkbox "Saya mengerti" + tombol) → hapus permanen, lalu rerun
+      dengan feedback hasil. Dipanggil dari `render_report_tab`.
+- [x] Verifikasi: `py_compile web/app.py` OK; uji `_delete_run_artifacts` dgn struktur dummy →
+      folder report+model run terhapus, `latest_run.txt` ter-update ke run tersisa, folder
+      kombinasi kosong ikut dibersihkan.
+
 ## Verifikasi
 - [x] `py_compile` semua file yang diubah → OK
 - [x] Uji fungsi optimizer registry & resolusi/validasi split → OK

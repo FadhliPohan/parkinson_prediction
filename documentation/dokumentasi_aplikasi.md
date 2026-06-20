@@ -203,6 +203,12 @@ File utama:
    - ringkasan dataset original,
    - ringkasan split train/testing/validation.
 2. Tab `Training Report`:
+   - `Ringkasan Run Terbaru per Kombinasi`: tabel run terbaru per kombinasi yang
+     dilengkapi kolom **Hapus** (checkbox). Centang run yang ingin dibuang lalu
+     konfirmasi untuk menghapus permanen folder report (`report/...`) sekaligus
+     folder model (`trained_models/...`) milik run tersebut. Marker `latest_run.txt`
+     otomatis diperbarui dan folder kombinasi yang menjadi kosong ikut dibersihkan.
+     Tujuannya: menyisakan hanya model yang benar-benar baik dan menghemat storage.
    - `Explorer`: telusur bertingkat dataset -> augmentasi -> method -> model -> run,
    - `Perbandingan`: antar method, antar model, antar augmentasi, dan ranking val accuracy.
    - detail run menampilkan runtime config yang dipakai (`epoch`, `batch`, `fine-tune`).

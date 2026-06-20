@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,7 +40,7 @@ from src.reporting.html_report import build_full_html_report
 from src.reporting.schemas import VISUAL_FILES
 from src.training.augmentations import TrainingAugmentationRegistry
 from src.training.strategies import TrainingMethodRegistry
-from src.utils.paths import REPORT_ROOT
+from src.utils.paths import REPORT_ROOT, TRAINED_MODELS_ROOT
 
 
 IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"]
@@ -275,6 +276,121 @@ def _resolve_run_dir(record: Dict[str, object]) -> Optional[Path]:
     return None
 
 
+def _resolve_model_dir(record: Dict[str, object], run_dir: Optional[Path]) -> Optional[Path]:
+    """Folder model (trained_models) yang berpasangan dengan run report.
+
+    Diutamakan hasil mirror dari ``run_dir`` (relatif terhadap REPORT_ROOT) karena
+    deterministik dan tetap valid walau path absolut yang tersimpan di manifest
+    berasal dari mesin lain. Jika tidak bisa, pakai ``model_dir`` di manifest.
+    """
+    if run_dir is not None:
+        try:
+            relative = run_dir.resolve().relative_to(REPORT_ROOT.resolve())
+            return TRAINED_MODELS_ROOT / relative
+        except Exception:
+            pass
+
+    stored = _value_to_path(record.get("model_dir"))
+    if stored is not None:
+        return stored
+    return None
+
+
+def _cleanup_empty_parents(start: Path, stop: Path) -> None:
+    """Hapus folder kombinasi yang menjadi kosong setelah run dihapus (sampai ``stop``)."""
+    try:
+        stop_resolved = stop.resolve()
+    except Exception:
+        return
+    current = start
+    for _ in range(6):  # batas aman: dataset/aug/method/model
+        try:
+            if current.resolve() == stop_resolved:
+                break
+            if not current.exists() or not current.is_dir():
+                break
+            remaining = [p for p in current.iterdir() if p.name != "latest_run.txt"]
+            if remaining:
+                break
+            shutil.rmtree(current, ignore_errors=True)
+        except Exception:
+            break
+        current = current.parent
+
+
+def _refresh_latest_run_marker(model_combo_dir: Path, deleted_run_id: str) -> None:
+    """Perbarui/hapus latest_run.txt bila menunjuk run yang baru dihapus."""
+    marker = model_combo_dir / "latest_run.txt"
+    if not marker.exists():
+        return
+    try:
+        current = marker.read_text(encoding="utf-8").strip()
+    except Exception:
+        return
+    if current != deleted_run_id:
+        return
+
+    try:
+        remaining_runs = sorted(
+            [p.name for p in model_combo_dir.iterdir() if p.is_dir()],
+            reverse=True,
+        )
+    except Exception:
+        remaining_runs = []
+
+    try:
+        if remaining_runs:
+            marker.write_text(remaining_runs[0], encoding="utf-8")
+        else:
+            marker.unlink()
+    except Exception:
+        pass
+
+
+def _delete_run_artifacts(record: Dict[str, object]) -> Dict[str, object]:
+    """Hapus folder report + model untuk satu run training.
+
+    Mengembalikan dict berisi status keberhasilan dan detail path yang dihapus.
+    """
+    run_id = str(record.get("run_id") or "").strip()
+    run_dir = _resolve_run_dir(record)
+    model_dir = _resolve_model_dir(record, run_dir)
+
+    deleted: List[str] = []
+    errors: List[str] = []
+
+    if run_dir is not None and run_dir.exists():
+        try:
+            shutil.rmtree(run_dir)
+            deleted.append(f"report: {run_dir}")
+            _cleanup_empty_parents(run_dir.parent, REPORT_ROOT)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"report ({run_dir}): {exc}")
+    elif run_dir is not None:
+        errors.append(f"report tidak ditemukan: {run_dir}")
+
+    if model_dir is not None and model_dir.exists():
+        model_combo_dir = model_dir.parent
+        try:
+            shutil.rmtree(model_dir)
+            deleted.append(f"model: {model_dir}")
+            if run_id:
+                _refresh_latest_run_marker(model_combo_dir, run_id)
+            _cleanup_empty_parents(model_combo_dir, TRAINED_MODELS_ROOT)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"model ({model_dir}): {exc}")
+    elif model_dir is not None:
+        # Folder model bisa saja tidak ada (mis. hanya report tersimpan) -> bukan error fatal.
+        deleted.append(f"model: (tidak ada folder) {model_dir}")
+
+    return {
+        "run_id": run_id,
+        "ok": not errors,
+        "deleted": deleted,
+        "errors": errors,
+    }
+
+
 def _metric_text(value: Optional[float]) -> str:
     if value is None or np.isnan(value):
         return "NaN"
@@ -325,18 +441,12 @@ def _sanitize_widget_key(value: str) -> str:
     return cleaned or "col"
 
 
-def _render_filterable_dataframe(
+def _apply_table_filters(
     df: pd.DataFrame,
     key_prefix: str,
     *,
-    use_container_width: bool = True,
     filters_expanded: bool = False,
-    empty_message: str = "Tidak ada data untuk ditampilkan.",
 ) -> pd.DataFrame:
-    if df.empty:
-        st.info(empty_message)
-        return df
-
     filtered_df = df.copy()
 
     with st.expander("Search / Filter Tabel", expanded=filters_expanded):
@@ -415,6 +525,22 @@ def _render_filterable_dataframe(
 
         st.caption(f"Hasil filter: {len(filtered_df)} / {len(df)} baris")
 
+    return filtered_df
+
+
+def _render_filterable_dataframe(
+    df: pd.DataFrame,
+    key_prefix: str,
+    *,
+    use_container_width: bool = True,
+    filters_expanded: bool = False,
+    empty_message: str = "Tidak ada data untuk ditampilkan.",
+) -> pd.DataFrame:
+    if df.empty:
+        st.info(empty_message)
+        return df
+
+    filtered_df = _apply_table_filters(df, key_prefix, filters_expanded=filters_expanded)
     st.dataframe(filtered_df, use_container_width=use_container_width)
     return filtered_df
 
@@ -1260,6 +1386,126 @@ def _render_download_section(records: List[Dict[str, object]]) -> None:
     )
 
 
+_DELETE_FLAG_COLUMN = "🗑️ Hapus"
+
+
+def _render_latest_summary_with_delete(
+    latest_df: pd.DataFrame,
+    records: List[Dict[str, object]],
+) -> None:
+    """Tabel ringkasan run terbaru + opsi hapus folder report & model per run."""
+    st.markdown("**Ringkasan Run Terbaru per Kombinasi**")
+    st.caption(
+        "Centang kolom Hapus pada run yang ingin dibuang, lalu konfirmasi. "
+        "Folder report dan model untuk run tersebut akan dihapus permanen agar "
+        "ruang penyimpanan tetap lega dan hanya menyisakan model yang baik."
+    )
+
+    # Tampilkan feedback hasil penghapusan dari rerun sebelumnya (sekali tampil).
+    feedback = st.session_state.pop("report_latest_delete_feedback", None)
+    if feedback:
+        for line in feedback.get("success", []):
+            st.success(line)
+        for line in feedback.get("error", []):
+            st.error(line)
+
+    record_by_run_id: Dict[str, Dict[str, object]] = {}
+    for record in records:
+        run_id = str(record.get("run_id") or "").strip()
+        if run_id:
+            record_by_run_id[run_id] = record
+
+    filtered_df = _apply_table_filters(latest_df, "report_latest_summary")
+    if filtered_df.empty:
+        st.info("Ringkasan run terbaru belum tersedia.")
+        return
+
+    # Checkbox per baris bila Streamlit mendukung data_editor + CheckboxColumn
+    # (versi produksi 1.56.0). Bila tidak (versi lama), fallback ke multiselect.
+    supports_editor = (
+        hasattr(st, "data_editor")
+        and hasattr(st, "column_config")
+        and hasattr(st.column_config, "CheckboxColumn")
+    )
+
+    if supports_editor:
+        editor_df = filtered_df.copy().reset_index(drop=True)
+        editor_df.insert(0, _DELETE_FLAG_COLUMN, False)
+        edited_df = st.data_editor(
+            editor_df,
+            use_container_width=True,
+            hide_index=True,
+            key="report_latest_summary_editor",
+            column_config={
+                _DELETE_FLAG_COLUMN: st.column_config.CheckboxColumn(
+                    _DELETE_FLAG_COLUMN,
+                    help="Centang baris yang ingin dihapus (report + model).",
+                    default=False,
+                )
+            },
+            disabled=[col for col in editor_df.columns if col != _DELETE_FLAG_COLUMN],
+        )
+        selected_rows = edited_df[edited_df[_DELETE_FLAG_COLUMN] == True]  # noqa: E712
+        selected_run_ids = [
+            str(rid).strip()
+            for rid in selected_rows.get("run_id", pd.Series(dtype=str)).tolist()
+            if str(rid).strip()
+        ]
+    else:
+        st.dataframe(filtered_df, use_container_width=True)
+        run_id_options = [
+            str(rid).strip()
+            for rid in filtered_df.get("run_id", pd.Series(dtype=str)).tolist()
+            if str(rid).strip()
+        ]
+        selected_run_ids = st.multiselect(
+            "Pilih run untuk dihapus (berdasarkan run_id)",
+            options=run_id_options,
+            default=[],
+            key="report_latest_delete_select",
+        )
+
+    if not selected_run_ids:
+        st.caption("Belum ada run yang dipilih untuk dihapus.")
+        return
+
+    st.warning(
+        f"{len(selected_run_ids)} run dipilih untuk dihapus permanen: "
+        + ", ".join(selected_run_ids)
+    )
+    confirm = st.checkbox(
+        "Saya mengerti, hapus permanen folder report & model untuk run terpilih.",
+        key="report_latest_delete_confirm",
+    )
+    if st.button(
+        "🗑️ Hapus Run Terpilih",
+        type="primary",
+        disabled=not confirm,
+        key="report_latest_delete_btn",
+    ):
+        success_lines: List[str] = []
+        error_lines: List[str] = []
+        for run_id in selected_run_ids:
+            record = record_by_run_id.get(run_id)
+            if record is None:
+                error_lines.append(f"Run {run_id}: data tidak ditemukan di index.")
+                continue
+            result = _delete_run_artifacts(record)
+            detail = "; ".join(result["deleted"]) if result["deleted"] else "tidak ada folder"
+            if result["ok"]:
+                success_lines.append(f"Run {run_id} dihapus -> {detail}")
+            else:
+                error_lines.append(
+                    f"Run {run_id} gagal/sebagian: {'; '.join(result['errors'])}"
+                )
+
+        st.session_state["report_latest_delete_feedback"] = {
+            "success": success_lines,
+            "error": error_lines,
+        }
+        st.rerun()
+
+
 def render_report_tab(
     dataset_registry: DatasetRegistry,
     model_registry: ModelRegistry,
@@ -1288,13 +1534,7 @@ def render_report_tab(
     latest_rows = build_latest_summary_table(REPORT_ROOT)
     latest_df = pd.DataFrame(latest_rows)
     if not latest_df.empty:
-        st.markdown("**Ringkasan Run Terbaru per Kombinasi**")
-        _render_filterable_dataframe(
-            latest_df,
-            key_prefix="report_latest_summary",
-            use_container_width=True,
-            empty_message="Ringkasan run terbaru belum tersedia.",
-        )
+        _render_latest_summary_with_delete(latest_df, records)
 
     tab_explorer, tab_comparison = st.tabs(["Explorer", "Perbandingan"])
 

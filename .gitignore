@@ -19,3 +19,6 @@ trained_models/**
 # Artefak visual/log lokal
 dataset_distribution.png
 *.log
+
+# Runtime deploy.sh (pid + log Streamlit background)
+.run/
