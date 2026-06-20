@@ -26,13 +26,15 @@ Jalankan:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-pip python3-venv git libgl1 libglib2.0-0
+sudo apt install -y python3 python3-pip python3-venv git libgl1 libglib2.0-0 screen
 ```
 
 Fungsi paket penting:
 1. `python3`, `python3-pip`, `python3-venv` untuk environment Python.
 2. `git` untuk clone/pull project.
 3. `libgl1` dan `libglib2.0-0` untuk kompatibilitas library visi komputer (dipakai dependency YOLO/OpenCV).
+4. `screen` untuk menjalankan training di background (lihat §9 & §10). Wajib agar
+   training dari web berjalan di screen dan tombol "Refresh Server" bisa membersihkan RAM.
 
 ## 4. Setup Environment Project di Linux
 
@@ -171,3 +173,43 @@ STOP_TRAINING=1 ./deploy.sh      # ikut hentikan training train.py yang berjalan
    (default) dan buka IP WSL/Windows yang sesuai.
 2. Untuk performa training, taruh project di filesystem **native WSL** (mis.
    `~/parkinson_prediction`), bukan di `/mnt/c/...` (akses lintas-FS lambat).
+
+## 10. Training di `screen` + Tombol "Refresh Server" (Linux)
+
+Agar tidak perlu menjaga PC menyala menunggu training, training dari dashboard
+dijalankan di dalam **screen session** (butuh paket `screen`, lihat §3).
+
+### A. Cara kerja training via screen
+1. Saat klik "Mulai Training", web menjalankan training di screen bernama
+   `pp_train_<timestamp>` (terdeteksi otomatis jika `screen` tersedia; bila tidak,
+   fallback ke subprocess biasa).
+2. Training menulis ke `report/_web_runs/train_*.log` dan kode keluar ke
+   `report/_web_runs/train_*.status`.
+3. **Saat training selesai, screen session otomatis tertutup (mati sendiri)** —
+   tidak menyisakan proses yang memakan RAM. Monitor di web membaca status dari
+   liveness screen + file `.status`.
+4. Inspeksi manual bila perlu:
+   ```bash
+   screen -ls                 # lihat session yang berjalan
+   screen -r pp_train_xxxx    # masuk ke session (Ctrl-A lalu D untuk keluar)
+   ```
+
+### B. Tombol "Refresh Server"
+Di tab **Training** ada panel **🔄 Kontrol Server (Refresh)**. Tombol ini:
+1. `git pull` kode terbaru,
+2. menutup **SEMUA** screen yang berjalan (membebaskan RAM),
+3. menyalakan ulang Streamlit (tanpa reboot OS).
+
+Eksekusinya lewat `refresh_server.sh` yang dijalankan ter-detach, jadi proses
+refresh tetap selesai walau Streamlit ikut direstart. Setelah menekan tombol,
+tunggu ±15 detik lalu muat ulang halaman (F5). Log refresh ada di `.run/refresh.log`.
+
+> Catatan: tombol Refresh menghentikan training yang sedang berjalan (karena
+> semua screen ditutup). Gunakan saat ingin "bersih-bersih" + update kode.
+
+### C. Padanan perintah manual
+```bash
+./deploy.sh kill-screens   # tutup semua screen (bebaskan RAM)
+./deploy.sh restart        # restart Streamlit saja
+./deploy.sh deploy         # git pull + restart Streamlit
+```

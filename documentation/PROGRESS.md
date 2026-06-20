@@ -161,6 +161,22 @@
       folder report+model run terhapus, `latest_run.txt` ter-update ke run tersisa, folder
       kombinasi kosong ikut dibersihkan.
 
+## T10 — Deploy WSL: deploy.sh + training via screen + tombol Refresh Server (2026-06-20)
+- [x] `deploy.sh` (baru): `git pull` + restart Streamlit di background (nohup, port 8501),
+      subcommand `restart|stop|kill-screens|status|logs`, var `PORT/ADDRESS/STOP_TRAINING`.
+      `.gitattributes` (baru) memaksa `*.sh` LF; `.run/` di-gitignore.
+- [x] `web/app.py`: training diluncurkan di **screen session** `pp_train_<ts>` bila `screen`
+      tersedia (fallback subprocess di Windows). Screen otomatis tertutup saat training selesai
+      (tidak menyisakan proses pemakan RAM). State pindah ke `train_state` (mode screen/proc),
+      status dibaca via liveness screen + file `.status`. Stop = `screen -X quit`.
+- [x] `web/app.py`: panel **🔄 Kontrol Server (Refresh)** di tab Training → `refresh_server.sh`
+      (git pull + kill semua screen + restart Streamlit, tanpa reboot). Dijalankan ter-detach
+      (`start_new_session`) agar selesai walau Streamlit ikut restart.
+- [x] `refresh_server.sh` (baru) + `deploy.sh kill-screens` (tutup semua screen, bebaskan RAM).
+- [x] Dokumentasi: `export to linux.md` (§3 tambah `screen`, §9 deploy.sh, §10 screen+Refresh), `PROGRESS.md`.
+- [x] Verifikasi: `bash -n` deploy.sh & refresh_server.sh OK; `py_compile web/app.py` OK;
+      `deploy.sh kill-screens/status` jalan benar di lingkungan tanpa screen.
+
 ## Verifikasi
 - [x] `py_compile` semua file yang diubah → OK
 - [x] Uji fungsi optimizer registry & resolusi/validasi split → OK

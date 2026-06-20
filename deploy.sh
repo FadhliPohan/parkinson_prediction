@@ -8,9 +8,10 @@
 # Pemakaian (jalankan dari folder project):
 #   ./deploy.sh            # git pull + restart Streamlit (default)
 #   ./deploy.sh restart    # restart Streamlit TANPA git pull
-#   ./deploy.sh stop       # hentikan Streamlit
-#   ./deploy.sh status     # cek status Streamlit
-#   ./deploy.sh logs       # ikuti log Streamlit (tail -f)
+#   ./deploy.sh stop          # hentikan Streamlit
+#   ./deploy.sh kill-screens  # tutup SEMUA screen (bebaskan RAM)
+#   ./deploy.sh status        # cek status Streamlit
+#   ./deploy.sh logs          # ikuti log Streamlit (tail -f)
 #
 # Variabel opsional:
 #   PORT=8502 ./deploy.sh           # ganti port (default 8501)
@@ -86,6 +87,27 @@ stop_training_if_requested() {
   fi
 }
 
+# Hentikan SEMUA screen session milik user ini (membebaskan RAM dari screen
+# training yang menumpuk). Dipakai tombol "Refresh Server" di dashboard.
+kill_all_screens() {
+  if ! command -v screen >/dev/null 2>&1; then
+    echo "[deploy] 'screen' tidak terpasang, lewati kill-screens."
+    return 0
+  fi
+  local sessions
+  sessions="$(screen -ls 2>/dev/null | grep -oE '[0-9]+\.[^[:space:]]+' || true)"
+  if [ -z "$sessions" ]; then
+    echo "[deploy] Tidak ada screen yang berjalan."
+  else
+    while IFS= read -r s; do
+      [ -z "$s" ] && continue
+      echo "[deploy] Menutup screen: $s"
+      screen -S "$s" -X quit 2>/dev/null || true
+    done <<< "$sessions"
+  fi
+  screen -wipe >/dev/null 2>&1 || true
+}
+
 start_streamlit() {
   echo "[deploy] Menjalankan Streamlit di background (port $PORT, address $ADDRESS)…"
   # nohup + stdin /dev/null + & → tetap hidup walau terminal/SSH ditutup, dan
@@ -137,6 +159,9 @@ case "$cmd" in
     stop_streamlit
     stop_training_if_requested
     ;;
+  kill-screens)
+    kill_all_screens
+    ;;
   status)
     if pid="$(is_running)"; then
       echo "[deploy] Streamlit BERJALAN (PID $pid) → http://localhost:$PORT"
@@ -150,7 +175,7 @@ case "$cmd" in
     tail -n 100 -f "$LOG_FILE"
     ;;
   *)
-    echo "Pemakaian: $0 {deploy|restart|stop|status|logs}" >&2
+    echo "Pemakaian: $0 {deploy|restart|stop|kill-screens|status|logs}" >&2
     exit 1
     ;;
 esac

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1887,41 +1888,138 @@ def _read_log_tail(path: Path, max_lines: int = 500) -> str:
     return "\n".join(lines[-max_lines:])
 
 
-def _start_training_process(command: List[str]):
-    """Jalankan training sebagai subprocess terpisah yang menulis ke file log.
+def _screen_available() -> bool:
+    """True bila `screen` bisa dipakai (Linux/WSL + terpasang)."""
+    return os.name != "nt" and shutil.which("screen") is not None
 
-    Proses tetap hidup di antara rerun Streamlit, jadi dashboard tidak perlu
-    memblokir menunggu output -> tidak ada timeout / koneksi mati saat training lama.
+
+def _screen_session_alive(session: str) -> bool:
+    """Cek apakah sebuah screen session masih hidup."""
+    if not session:
+        return False
+    try:
+        out = subprocess.run(
+            ["screen", "-ls"], capture_output=True, text=True, stdin=subprocess.DEVNULL
+        )
+    except Exception:
+        return False
+    # `screen -ls` mengembalikan exit code != 0 saat ada sesi; abaikan, parse stdout.
+    return session in (out.stdout or "")
+
+
+def _quit_screen_session(session: str) -> None:
+    """Hentikan satu screen session (mematikan proses di dalamnya)."""
+    if not session:
+        return
+    try:
+        subprocess.run(
+            ["screen", "-S", session, "-X", "quit"],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        )
+        subprocess.run(["screen", "-wipe"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def _start_training_process(command: List[str]) -> Dict[str, Any]:
+    """Luncurkan training di background; kembalikan dict state.
+
+    - Linux + `screen` tersedia: training jalan di dalam screen session
+      (`pp_train_<timestamp>`). screen `-dmS` otomatis **menutup sesi (mematikan
+      screen id)** begitu training selesai -> user tidak perlu menjaga PC. Sesi
+      ini juga bisa dimatikan massal lewat tombol "Refresh Server".
+    - Selain itu (mis. Windows dev): fallback ke subprocess detached + file log.
+
+    Di kedua mode, stdin diarahkan ke DEVNULL agar train.py tidak mewarisi tty dan
+    tidak menggantung di prompt konfirmasi (lihat juga `--non-interactive`).
     """
     WEB_RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = WEB_RUN_LOG_DIR / f"train_{stamp}.log"
-    log_file = open(log_path, "w", encoding="utf-8")
-    log_file.write("Menjalankan: " + " ".join(command) + "\n\n")
-    log_file.flush()
+    status_path = WEB_RUN_LOG_DIR / f"train_{stamp}.status"
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write("Menjalankan: " + " ".join(command) + "\n\n")
 
+    if _screen_available():
+        session = f"pp_train_{stamp}"
+        inner = " ".join(shlex.quote(c) for c in command)
+        # Tulis output ke log + simpan exit code ke status file. Setelah perintah
+        # selesai, screen window tertutup -> screen id otomatis mati.
+        bash_cmd = (
+            f"{inner} >> {shlex.quote(str(log_path))} 2>&1; "
+            f"echo $? > {shlex.quote(str(status_path))}"
+        )
+        screen_cmd = ["screen", "-dmS", session, "bash", "-lc", bash_cmd]
+        subprocess.run(
+            screen_cmd,
+            cwd=str(PROJECT_ROOT),
+            env=build_runtime_env(),
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
+        return {
+            "mode": "screen",
+            "screen": session,
+            "log_path": str(log_path),
+            "status_path": str(status_path),
+            "proc": None,
+            "log_file": None,
+        }
+
+    # Fallback (Windows / screen tidak ada): subprocess detached.
+    log_file = open(log_path, "a", encoding="utf-8")
     popen_kwargs: Dict[str, Any] = {
         "cwd": str(PROJECT_ROOT),
         "env": build_runtime_env(),
-        # stdin DEVNULL: subprocess JANGAN mewarisi tty milik streamlit. Tanpa ini,
-        # train.py mengira sesi interaktif lalu memanggil input() dan menggantung
-        # selamanya (mis. prompt "Lanjutkan training ulang? [y/N]").
         "stdin": subprocess.DEVNULL,
         "stdout": log_file,
         "stderr": subprocess.STDOUT,
         "text": True,
     }
-    # Buat process group sendiri agar bisa di-stop bersih lintas platform.
     if os.name == "nt":
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         popen_kwargs["start_new_session"] = True
-
     process = subprocess.Popen(command, **popen_kwargs)
-    return process, log_path, log_file
+    return {
+        "mode": "proc",
+        "screen": None,
+        "log_path": str(log_path),
+        "status_path": None,
+        "proc": process,
+        "log_file": log_file,
+    }
 
 
-def _stop_training_process(process) -> None:
+def _training_status(state: Optional[Dict[str, Any]]):
+    """Kembalikan (running: bool, return_code: Optional[int]) untuk state training."""
+    if not state:
+        return False, None
+    if state.get("mode") == "screen":
+        if _screen_session_alive(state.get("screen") or ""):
+            return True, None
+        status_path = state.get("status_path")
+        code: Optional[int] = None
+        if status_path and Path(status_path).exists():
+            try:
+                code = int((Path(status_path).read_text(encoding="utf-8").strip() or "x"))
+            except Exception:
+                code = None
+        return False, code
+    proc = state.get("proc")
+    if proc is None:
+        return False, None
+    rc = proc.poll()
+    return (rc is None), rc
+
+
+def _stop_training_process(state: Optional[Dict[str, Any]]) -> None:
+    if not state:
+        return
+    if state.get("mode") == "screen":
+        _quit_screen_session(state.get("screen") or "")
+        return
+    process = state.get("proc")
     if process is None:
         return
     try:
@@ -1934,6 +2032,31 @@ def _stop_training_process(process) -> None:
             process.kill()
         except Exception:
             pass
+
+
+def _refresh_server() -> bool:
+    """Luncurkan refresh_server.sh ter-detach: git pull + kill semua screen + restart Streamlit.
+
+    Hanya untuk Linux/WSL (butuh bash). Proses dijalankan dengan sesi baru sendiri
+    agar tetap hidup walau Streamlit (pemanggilnya) ikut dimatikan saat restart.
+    """
+    if os.name == "nt":
+        return False
+    script = PROJECT_ROOT / "refresh_server.sh"
+    if not script.exists():
+        return False
+    try:
+        subprocess.Popen(
+            ["bash", str(script)],
+            cwd=str(PROJECT_ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _web_preset_to_record_label(preset: str) -> str:
@@ -2026,6 +2149,40 @@ def _build_training_command(form: Dict[str, Any]) -> List[str]:
     return cmd
 
 
+def _render_server_control() -> None:
+    """Panel 'Refresh Server': git pull + kill semua screen + restart Streamlit.
+
+    Berguna untuk update kode tanpa membuka terminal, dan membebaskan RAM dengan
+    menutup semua screen training yang menumpuk.
+    """
+    with st.expander("🔄 Kontrol Server (Refresh)", expanded=False):
+        st.caption(
+            "Refresh Server akan: **(1)** menarik kode terbaru (git pull) → "
+            "**(2)** menghentikan SEMUA screen yang berjalan (bebaskan RAM) → "
+            "**(3)** menyalakan ulang Streamlit. Dashboard akan terputus ±15 detik, "
+            "lalu muat ulang halaman (F5)."
+        )
+        if os.name == "nt":
+            st.info("Refresh Server hanya tersedia saat dijalankan di VM Linux/WSL (butuh bash + screen).")
+            return
+        confirm = st.checkbox(
+            "Saya paham semua training/screen yang berjalan akan dihentikan.",
+            key="refresh_confirm",
+        )
+        if st.button("🔄 Refresh Server sekarang", type="secondary", disabled=not confirm, key="refresh_btn"):
+            if _refresh_server():
+                st.success(
+                    "Perintah refresh dikirim. Server sedang pull kode + restart. "
+                    "Tunggu ±15 detik lalu muat ulang halaman (F5)."
+                )
+                st.stop()
+            else:
+                st.error(
+                    "Gagal memulai refresh. Pastikan `refresh_server.sh` ada di root project "
+                    "dan `bash` tersedia."
+                )
+
+
 def render_training_tab(
     dataset_registry: DatasetRegistry,
     model_registry: ModelRegistry,
@@ -2039,6 +2196,8 @@ def render_training_tab(
         "training lama. Anda boleh berpindah tab; proses tetap jalan.</div>",
         unsafe_allow_html=True,
     )
+
+    _render_server_control()
 
     # ------------------------------------------------------------------ #
     # Jika ada training yang sedang berjalan, tampilkan monitornya lebih dulu.
@@ -2277,34 +2436,37 @@ def render_training_tab(
 
     if st.button("Mulai Training", type="primary", key="train_run_btn", disabled=start_disabled):
         try:
-            process, log_path, log_file = _start_training_process(command)
+            state = _start_training_process(command)
         except Exception as exc:
             st.error(f"Gagal memulai training: {exc}")
             return
-        st.session_state["train_proc"] = process
-        st.session_state["train_log_path"] = str(log_path)
-        st.session_state["train_log_file"] = log_file
+        st.session_state["train_state"] = state
         st.session_state["train_cmd"] = " ".join(command)
         st.session_state["train_active"] = True
+        if state.get("mode") == "screen":
+            st.toast(f"Training berjalan di screen: {state.get('screen')}")
         st.rerun()
 
 
 def _render_active_training_monitor() -> None:
     """Pantau training yang berjalan tanpa memblokir UI (auto-refresh berkala)."""
-    process = st.session_state.get("train_proc")
-    log_path = st.session_state.get("train_log_path")
+    state = st.session_state.get("train_state")
+    log_path = state.get("log_path") if state else None
 
     st.markdown("### Monitor Training Berjalan")
     if st.session_state.get("train_cmd"):
         st.code(st.session_state["train_cmd"], language="bash")
+    if state and state.get("mode") == "screen" and state.get("screen"):
+        st.caption(f"Berjalan di screen session: `{state['screen']}` "
+                   "(otomatis tertutup saat training selesai).")
 
     log_text = _read_log_tail(Path(log_path)) if log_path else ""
-    return_code = process.poll() if process is not None else None
+    running, return_code = _training_status(state)
 
-    if return_code is None and process is not None:
+    if running:
         st.info("Status: training sedang berjalan… (log diperbarui otomatis setiap beberapa detik)")
         if st.button("Hentikan Training", type="secondary", key="train_stop_btn"):
-            _stop_training_process(process)
+            _stop_training_process(state)
             st.warning("Sinyal stop dikirim. Menunggu proses berhenti…")
         st.code(log_text or "(menunggu output pertama…)")
         # Refresh ringan: tiap rerun pendek -> koneksi tetap hidup, tidak timeout.
@@ -2313,17 +2475,18 @@ def _render_active_training_monitor() -> None:
         return
 
     # Training selesai (atau handle proses hilang).
-    log_file = st.session_state.get("train_log_file")
-    if log_file is not None:
-        try:
-            log_file.close()
-        except Exception:
-            pass
+    if state and state.get("mode") == "proc":
+        log_file = state.get("log_file")
+        if log_file is not None:
+            try:
+                log_file.close()
+            except Exception:
+                pass
 
     if return_code == 0:
-        st.success("Training selesai tanpa error.")
+        st.success("Training selesai tanpa error. Screen sudah ditutup otomatis.")
     elif return_code is None:
-        st.warning("Proses training tidak terlacak lagi (handle hilang). Periksa log di bawah.")
+        st.warning("Proses training sudah tidak terlacak. Periksa log di bawah.")
     else:
         st.error(f"Training selesai dengan kode keluar {return_code}. Periksa log di bawah.")
 
@@ -2337,7 +2500,7 @@ def _render_active_training_monitor() -> None:
     st.caption("Lihat detail metrik & grafik pada tab 'Training Report'.")
 
     if st.button("Tutup monitor / reset", key="train_reset_btn"):
-        for key in ["train_active", "train_proc", "train_log_path", "train_log_file", "train_cmd"]:
+        for key in ["train_active", "train_state", "train_cmd"]:
             st.session_state.pop(key, None)
         st.rerun()
 
